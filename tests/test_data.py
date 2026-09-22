@@ -411,6 +411,42 @@ def test_missing_sampling_domain_raises_instead_of_relabeling_fallback(
         dataset[blank_index]
 
 
+def test_edge_sampling_keeps_requested_domain_at_tile_center(
+    tmp_path: Path,
+) -> None:
+    positive = np.zeros((7, 7), bool)
+    positive[3, 6] = True
+    manifest = _write_array_manifest(
+        tmp_path,
+        [
+            {
+                "image": np.full((7, 7), 127, np.uint8),
+                "labels": {
+                    "positive_mask": positive,
+                    "known_mask": positive,
+                },
+            }
+        ],
+    )
+    dataset = HatchTileDataset(
+        load_training_examples(manifest, tmp_path),
+        tile_size=3,
+        samples_per_epoch=10,
+        seed=31,
+        augment=False,
+    )
+    positive_index = next(
+        index
+        for index in range(10)
+        if dataset.sample_kind(index) == "positive"
+    )
+
+    item = dataset[positive_index]
+
+    assert item["known"][0, 1, 1].item() == 1.0
+    assert item["target"][0, 1, 1].item() == 1.0
+
+
 def test_each_complete_schedule_block_is_four_three_two_one(
     tmp_path: Path,
 ) -> None:
