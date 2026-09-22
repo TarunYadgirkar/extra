@@ -18,13 +18,15 @@ from PIL import Image
 import yaml
 
 from hatchmatch.baseline import baseline_probability
-from hatchmatch.contracts import Box
+from hatchmatch.contracts import Box, Request, load_requests
 from hatchmatch.output import write_binary_png
 
 CONFIG_KEYS = {
     "challenge_dir",
-    "manifest",
+    "challenge_revision",
     "data_root",
+    "evaluation_manifest",
+    "inputs",
     "max_dimension",
     "run_dir",
     "threshold",
@@ -59,105 +61,110 @@ def _load_config(path: Path) -> dict[str, Any]:
         raise ValueError("config threshold must be a finite number in [0, 1]")
     config["threshold"] = float(threshold)
     max_dimension = config["max_dimension"]
-    if type(max_dimension) is not int or max_dimension <= 0:
-        raise ValueError("config max_dimension must be a positive integer")
-    for field in CONFIG_KEYS - {"threshold", "max_dimension"}:
+    if max_dimension is not None and (
+        type(max_dimension) is not int or max_dimension <= 0
+    ):
+        raise ValueError(
+            "config max_dimension must be null or a positive integer"
+        )
+    revision = config["challenge_revision"]
+    if (
+        not isinstance(revision, str)
+        or len(revision) != 40
+        or any(character not in "0123456789abcdef" for character in revision)
+    ):
+        raise ValueError(
+            "config challenge_revision must be 40 lowercase hexadecimal characters"
+        )
+    for field in CONFIG_KEYS - {
+        "challenge_revision",
+        "threshold",
+        "max_dimension",
+    }:
         config[field] = _config_path(config[field], path.parent, field)
     return config
 
 
-def _manifest_rows(path: Path) -> list[dict[str, Any]]:
-    manifest = json.loads(path.read_text(encoding="utf-8"))
-    rows = manifest.get("examples") if isinstance(manifest, dict) else manifest
-    if not isinstance(rows, list) or not rows:
-        raise ValueError("manifest must contain a non-empty examples list")
-    if not all(isinstance(row, dict) for row in rows):
-        raise ValueError("every manifest example must be an object")
-    return rows
-
-
-def _safe_image_path(data_root: Path, relative: Any) -> Path:
-    if not isinstance(relative, str) or not relative:
-        raise ValueError("manifest image must be a non-empty relative path")
-    path = (data_root / relative).resolve()
-    if not path.is_relative_to(data_root):
-        raise ValueError(f"manifest image escapes data_root: {relative!r}")
-    return path
-
-
 def _predict(
-    rows: list[dict[str, Any]],
-    data_root: Path,
+    requests: list[Request],
     predictions: Path,
     threshold: float,
-    max_dimension: int,
+    max_dimension: int | None,
 ) -> None:
     predictions.mkdir(parents=True, exist_ok=True)
     for stale in predictions.glob("*.png"):
         stale.unlink()
 
-    for row in rows:
-        identifier = row.get("id")
-        if not isinstance(identifier, str) or not identifier:
-            raise ValueError("manifest example id must be non-empty text")
-        width, height = row.get("width"), row.get("height")
-        if (
-            type(width) is not int
-            or type(height) is not int
-            or min(width, height) <= 0
-        ):
-            raise ValueError(
-                f"{identifier}: width and height must be positive integers"
-            )
-        raw_box = row.get("query_box")
-        if not isinstance(raw_box, list) or len(raw_box) != 4:
-            raise ValueError(f"{identifier}: query_box must contain four coordinates")
-        query_box = Box(*raw_box)
-        if query_box.x1 > width or query_box.y1 > height:
-            raise ValueError(f"{identifier}: query_box exceeds native image bounds")
-
-        image_path = _safe_image_path(data_root, row.get("image"))
-        with Image.open(image_path) as image:
+    for request in requests:
+        with Image.open(request.image) as image:
             gray = np.asarray(image.convert("L"))
-        if gray.shape != (height, width):
-            raise ValueError(
-                f"{identifier}: image shape {gray.shape} does not match "
-                f"declared {(height, width)}"
-            )
 
-        if max(width, height) > max_dimension:
-            scale = max_dimension / max(width, height)
-            working_width = max(1, int(round(width * scale)))
-            working_height = max(1, int(round(height * scale)))
+        if (
+            max_dimension is not None
+            and max(request.width, request.height) > max_dimension
+        ):
+            nominal_scale = max_dimension / max(request.width, request.height)
+            working_width = max(1, int(round(request.width * nominal_scale)))
+            working_height = max(1, int(round(request.height * nominal_scale)))
+            x_scale = working_width / request.width
+            y_scale = working_height / request.height
             working_gray = cv2.resize(
                 gray,
                 (working_width, working_height),
                 interpolation=cv2.INTER_AREA,
             )
             working_box = Box(
-                min(working_width - 1, int(np.floor(query_box.x0 * scale))),
-                min(working_height - 1, int(np.floor(query_box.y0 * scale))),
+                min(
+                    working_width - 1,
+                    int(np.floor(request.query_box.x0 * x_scale)),
+                ),
+                min(
+                    working_height - 1,
+                    int(np.floor(request.query_box.y0 * y_scale)),
+                ),
                 min(
                     working_width,
-                    max(1, int(np.ceil(query_box.x1 * scale))),
+                    max(1, int(np.ceil(request.query_box.x1 * x_scale))),
                 ),
                 min(
                     working_height,
-                    max(1, int(np.ceil(query_box.y1 * scale))),
+                    max(1, int(np.ceil(request.query_box.y1 * y_scale))),
                 ),
             )
             probability = baseline_probability(working_gray, working_box)
             probability = cv2.resize(
                 probability,
-                (width, height),
+                (request.width, request.height),
                 interpolation=cv2.INTER_LINEAR,
             )
         else:
-            probability = baseline_probability(gray, query_box)
+            probability = baseline_probability(gray, request.query_box)
         write_binary_png(
             probability >= threshold,
-            predictions / f"{identifier}.png",
-            (width, height),
+            predictions / f"{request.id}.png",
+            (request.width, request.height),
+        )
+
+
+def _verify_challenge_revision(
+    challenge_dir: Path, expected_revision: str
+) -> None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(challenge_dir), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            f"cannot verify challenge revision in {challenge_dir}"
+        ) from exc
+    actual_revision = completed.stdout.strip()
+    if actual_revision != expected_revision:
+        raise RuntimeError(
+            f"challenge revision mismatch: expected {expected_revision}, "
+            f"found {actual_revision}"
         )
 
 
@@ -167,15 +174,16 @@ def run_baseline(config_path: str | Path) -> dict[str, Any]:
     path = Path(config_path).resolve()
     config = _load_config(path)
     challenge_dir: Path = config["challenge_dir"]
-    manifest: Path = config["manifest"]
+    inputs: Path = config["inputs"]
+    evaluation_manifest: Path = config["evaluation_manifest"]
     data_root: Path = config["data_root"]
     run_dir: Path = config["run_dir"]
     predictions = run_dir / "predictions"
     metrics_path = run_dir / "metrics.json"
 
+    _verify_challenge_revision(challenge_dir, config["challenge_revision"])
     _predict(
-        _manifest_rows(manifest),
-        data_root,
+        load_requests(inputs, data_root),
         predictions,
         config["threshold"],
         config["max_dimension"],
@@ -186,7 +194,7 @@ def run_baseline(config_path: str | Path) -> dict[str, Any]:
             sys.executable,
             str(challenge_dir / "evaluate.py"),
             "--manifest",
-            str(manifest),
+            str(evaluation_manifest),
             "--data-root",
             str(data_root),
             "--predictions",

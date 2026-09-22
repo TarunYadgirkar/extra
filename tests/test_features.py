@@ -12,7 +12,7 @@ def test_texture_channels_preserve_native_shape_and_have_finite_unit_range():
 
     assert channels.shape[:2] == gray.shape
     assert channels.ndim == 3
-    assert channels.shape[2] >= 148
+    assert channels.shape[2] == 153
     assert channels.dtype == np.float32
     assert np.isfinite(channels).all()
     assert channels.min() >= 0.0

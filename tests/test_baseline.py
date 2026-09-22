@@ -1,26 +1,114 @@
+import json
 import numpy as np
 from PIL import Image
 from pathlib import Path
 import subprocess
 import sys
+import pytest
 import yaml
 
 from hatchmatch.baseline import baseline_probability
-from hatchmatch.contracts import Box
-from scripts.run_experiments import run_baseline
+from hatchmatch.contracts import Box, load_requests
+import scripts.run_experiments as experiments
+
+OFFICIAL_REVISION = "65b98e480f2a10b82f974f4feb519ee4e012d66c"
 
 
-def test_experiment_runner_supports_direct_script_invocation():
-    project_root = Path(__file__).parents[1]
-
-    completed = subprocess.run(
-        [sys.executable, "scripts/run_experiments.py", "--help"],
-        cwd=project_root,
-        capture_output=True,
-        text=True,
+def _write_inputs(path: Path, examples: list[dict[str, object]]) -> None:
+    path.write_text(
+        json.dumps(
+            {"schema": "hatch-matching-inputs/v1", "examples": examples}
+        ),
+        encoding="utf-8",
     )
 
-    assert completed.returncode == 0, completed.stderr
+
+def _example(**overrides: object) -> dict[str, object]:
+    example: dict[str, object] = {
+        "id": "example-1",
+        "image": "page.png",
+        "width": 28,
+        "height": 20,
+        "query_box": [2, 3, 14, 16],
+        "context_boxes": [],
+    }
+    example.update(overrides)
+    return example
+
+
+def _fake_challenge(path: Path) -> str:
+    path.mkdir()
+    (path / "evaluate.py").write_text(
+        """
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--manifest")
+parser.add_argument("--data-root")
+parser.add_argument("--predictions")
+parser.add_argument("--output")
+args = parser.parse_args()
+assert (Path(args.predictions) / "example-1.png").is_file()
+Path(args.output).write_text(
+    json.dumps({"summary": {"document_macro_iou": 0.25}}),
+    encoding="utf-8",
+)
+        """,
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "-C", str(path), "add", "evaluate.py"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+    )
+    return subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _write_config(
+    path: Path,
+    *,
+    challenge_dir: Path,
+    revision: str,
+    inputs: Path,
+    evaluation_manifest: Path,
+    data_root: Path,
+    run_dir: Path,
+    max_dimension: int | None,
+) -> None:
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "challenge_dir": str(challenge_dir),
+                "challenge_revision": revision,
+                "inputs": str(inputs),
+                "evaluation_manifest": str(evaluation_manifest),
+                "data_root": str(data_root),
+                "run_dir": str(run_dir),
+                "threshold": 0.5,
+                "max_dimension": max_dimension,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_baseline_prefers_matching_orientation():
@@ -60,64 +148,130 @@ def test_baseline_is_deterministic():
     np.testing.assert_array_equal(first, second)
 
 
-def test_baseline_runner_writes_predictions_and_official_metrics(tmp_path):
+def test_baseline_runner_full_subcommand_uses_label_free_inputs(tmp_path):
     data_root = tmp_path / "dataset"
     data_root.mkdir()
     Image.fromarray(np.full((20, 28), 255, np.uint8)).save(data_root / "page.png")
-    manifest = data_root / "val.json"
-    manifest.write_text(
-        """
-        {"examples": [{
-          "id": "example-1", "document_id": "doc-1", "kind": "real",
-          "image": "page.png", "width": 28, "height": 20,
-          "query_box": [2, 3, 14, 16], "context_boxes": [],
-          "labels": {"positive_boxes": [[0, 0, 1, 1]]}
-        }]}
-        """,
+    inputs = tmp_path / "validation-inputs.json"
+    _write_inputs(inputs, [_example()])
+    evaluation_manifest = data_root / "val.json"
+    evaluation_manifest.write_text(
+        json.dumps({"examples": [{"labels": {"private": "not-for-inference"}}]}),
         encoding="utf-8",
     )
     challenge_dir = tmp_path / "challenge"
-    challenge_dir.mkdir()
-    (challenge_dir / "evaluate.py").write_text(
-        """
-import argparse
-import json
-from pathlib import Path
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--manifest")
-parser.add_argument("--data-root")
-parser.add_argument("--predictions")
-parser.add_argument("--output")
-args = parser.parse_args()
-assert (Path(args.predictions) / "example-1.png").is_file()
-Path(args.output).write_text(
-    json.dumps({"summary": {"document_macro_iou": 0.25}}),
-    encoding="utf-8",
-)
-        """,
-        encoding="utf-8",
-    )
+    revision = _fake_challenge(challenge_dir)
     run_dir = tmp_path / "run"
     config_path = tmp_path / "baseline.yaml"
-    config_path.write_text(
-        yaml.safe_dump(
-            {
-                "challenge_dir": str(challenge_dir),
-                "manifest": str(manifest),
-                "data_root": str(data_root),
-                "run_dir": str(run_dir),
-                "threshold": 0.5,
-                "max_dimension": 16,
-            }
-        ),
-        encoding="utf-8",
+    _write_config(
+        config_path,
+        challenge_dir=challenge_dir,
+        revision=revision,
+        inputs=inputs,
+        evaluation_manifest=evaluation_manifest,
+        data_root=data_root,
+        run_dir=run_dir,
+        max_dimension=None,
     )
 
-    metrics = run_baseline(config_path)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_experiments.py",
+            "baseline",
+            "--config",
+            str(config_path),
+        ],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        text=True,
+    )
 
+    assert completed.returncode == 0, completed.stderr
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     assert metrics["summary"]["document_macro_iou"] == 0.25
-    assert (run_dir / "metrics.json").is_file()
     with Image.open(run_dir / "predictions" / "example-1.png") as prediction:
         assert prediction.size == (28, 20)
         assert set(np.asarray(prediction).ravel()).issubset({0, 255})
+
+
+def test_runner_rejects_mismatched_challenge_revision(tmp_path):
+    data_root = tmp_path / "dataset"
+    data_root.mkdir()
+    Image.fromarray(np.full((20, 28), 255, np.uint8)).save(data_root / "page.png")
+    inputs = tmp_path / "inputs.json"
+    _write_inputs(inputs, [_example()])
+    evaluation_manifest = tmp_path / "val.json"
+    evaluation_manifest.write_text("{}", encoding="utf-8")
+    challenge_dir = tmp_path / "challenge"
+    _fake_challenge(challenge_dir)
+    config_path = tmp_path / "baseline.yaml"
+    _write_config(
+        config_path,
+        challenge_dir=challenge_dir,
+        revision="0" * 40,
+        inputs=inputs,
+        evaluation_manifest=evaluation_manifest,
+        data_root=data_root,
+        run_dir=tmp_path / "run",
+        max_dimension=None,
+    )
+
+    with pytest.raises(RuntimeError, match="revision"):
+        experiments.run_baseline(config_path)
+
+
+def test_resize_maps_query_with_actual_axis_scales_and_stays_registered(
+    tmp_path, monkeypatch
+):
+    data_root = tmp_path / "dataset"
+    data_root.mkdir()
+    Image.fromarray(np.full((17, 31), 255, np.uint8)).save(data_root / "page.png")
+    inputs = tmp_path / "inputs.json"
+    _write_inputs(
+        inputs,
+        [
+            _example(
+                width=31,
+                height=17,
+                query_box=[3, 10, 20, 14],
+            )
+        ],
+    )
+    requests = load_requests(inputs, data_root)
+    observed: dict[str, object] = {}
+
+    def fake_baseline(gray, query_box):
+        observed["shape"] = gray.shape
+        observed["box"] = query_box
+        probability = np.zeros(gray.shape, np.float32)
+        probability[
+            query_box.y0 : query_box.y1, query_box.x0 : query_box.x1
+        ] = 1.0
+        return probability
+
+    monkeypatch.setattr(experiments, "baseline_probability", fake_baseline)
+    predictions = tmp_path / "predictions"
+
+    experiments._predict(requests, predictions, threshold=0.5, max_dimension=10)
+
+    assert observed == {
+        "shape": (5, 10),
+        "box": Box(0, 2, 7, 5),
+    }
+    with Image.open(predictions / "example-1.png") as prediction:
+        selected = np.asarray(prediction) != 0
+    assert selected.any()
+    assert selected[12, 11]
+
+
+def test_native_resolution_is_the_default():
+    config = yaml.safe_load(
+        (Path(__file__).parents[1] / "configs/baseline.yaml").read_text()
+    )
+
+    assert config["max_dimension"] is None
+    assert config["challenge_revision"] == OFFICIAL_REVISION
+    assert "inputs" in config
+    assert "evaluation_manifest" in config
+    assert "manifest" not in config

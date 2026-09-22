@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from PIL import Image, UnidentifiedImageError
 
-SCHEMA = "hatch-matching-challenge/v1"
+SCHEMA = "hatch-matching-inputs/v1"
 MANIFEST_KEYS = frozenset({"schema", "examples"})
 EXAMPLE_KEYS = frozenset(
     {
         "id",
-        "document_id",
-        "kind",
         "image",
         "width",
         "height",
@@ -49,8 +48,6 @@ class Request:
     """One validated, label-free inference request."""
 
     id: str
-    document_id: str
-    kind: str
     image: Path
     width: int
     height: int
@@ -89,6 +86,15 @@ def _text_field(example: dict[str, Any], field: str, index: int) -> str:
     value = _required(example, field, index)
     if not isinstance(value, str) or not value:
         raise ValueError(f"example {index} field {field!r} must be non-empty text")
+    return value
+
+
+def _identifier(example: dict[str, Any], index: int) -> str:
+    value = _text_field(example, "id", index)
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value) is None:
+        raise ValueError(
+            f"example {index} field 'id' must be a safe prediction filename stem"
+        )
     return value
 
 
@@ -165,7 +171,7 @@ def load_requests(
             raise ValueError(f"example {index} must be a JSON object")
         _reject_unexpected_keys(example, EXAMPLE_KEYS, f"example {index}")
 
-        request_id = _text_field(example, "id", index)
+        request_id = _identifier(example, index)
         if request_id in seen_ids:
             raise ValueError(f"duplicate request id: {request_id!r}")
         seen_ids.add(request_id)
@@ -211,8 +217,6 @@ def load_requests(
         requests.append(
             Request(
                 id=request_id,
-                document_id=_text_field(example, "document_id", index),
-                kind=_text_field(example, "kind", index),
                 image=image_path,
                 width=width,
                 height=height,

@@ -7,7 +7,7 @@ from PIL import Image
 from hatchmatch.contracts import Box, Request, load_requests
 
 
-SCHEMA = "hatch-matching-challenge/v1"
+SCHEMA = "hatch-matching-inputs/v1"
 
 
 def _write_image(path: Path, size: tuple[int, int] = (4, 3)) -> None:
@@ -17,8 +17,6 @@ def _write_image(path: Path, size: tuple[int, int] = (4, 3)) -> None:
 def _example(**overrides: object) -> dict[str, object]:
     example: dict[str, object] = {
         "id": "x",
-        "document_id": "d",
-        "kind": "real",
         "image": "x.png",
         "width": 4,
         "height": 3,
@@ -90,8 +88,6 @@ def test_loader_returns_frozen_native_coordinate_contracts(tmp_path: Path) -> No
     assert requests == [
         Request(
             id="x",
-            document_id="d",
-            kind="real",
             image=(tmp_path / "x.png").resolve(),
             width=4,
             height=3,
@@ -118,6 +114,17 @@ def test_loader_rejects_duplicate_ids(tmp_path: Path) -> None:
     _write_manifest(path, [_example(), _example(image="other.png")])
 
     with pytest.raises(ValueError, match="duplicate.*x"):
+        load_requests(path, tmp_path)
+
+
+@pytest.mark.parametrize("identifier", ["../escape", "/absolute", "a/b", "bad id"])
+def test_loader_rejects_unsafe_prediction_ids(
+    tmp_path: Path, identifier: str
+) -> None:
+    path = tmp_path / "inputs.json"
+    _write_manifest(path, [_example(id=identifier)])
+
+    with pytest.raises(ValueError, match="id"):
         load_requests(path, tmp_path)
 
 
