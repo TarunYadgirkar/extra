@@ -431,14 +431,8 @@ def _crop_with_padding(
 ) -> np.ndarray:
     height, width = array.shape[:2]
     center_y, center_x = center
-    if height >= size:
-        y0 = min(max(center_y - size // 2, 0), height - size)
-    else:
-        y0 = -(size - height) // 2
-    if width >= size:
-        x0 = min(max(center_x - size // 2, 0), width - size)
-    else:
-        x0 = -(size - width) // 2
+    y0 = center_y - size // 2
+    x0 = center_x - size // 2
     y1, x1 = y0 + size, x0 + size
     source_y0, source_y1 = max(y0, 0), min(y1, height)
     source_x0, source_x1 = max(x0, 0), min(x1, width)
