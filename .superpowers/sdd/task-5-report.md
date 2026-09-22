@@ -16,9 +16,9 @@ any loss calculation. Boundary comparisons are included only when both
 adjacent endpoints are known. Empty known regions produce differentiable zero.
 
 Offline construction supports canonical NVIDIA MiT B0-B5 configurations when
-`pretrained=False`. Loading pretrained weights requires an explicit
-40-character Hugging Face revision so the future artifact cannot be loaded
-from a mutable branch or tag.
+`pretrained=False`. Default pretrained B2 construction uses repository-pinned
+revision `3bb39e8739149c3777d0325349b2a6c32c6413db`; other backbones require an
+explicit 40-character Hugging Face revision.
 
 ## RED evidence
 
@@ -82,7 +82,52 @@ Coverage added for:
 
 ## Concerns
 
-- The network-loading path was not exercised because this task's tests must run
-  offline. It delegates to `SegformerModel.from_pretrained` and requires a
-  pinned revision; the final chosen revision and checksum remain release
-  configuration work.
+- The network-loading path is tested through its real call boundary with a
+  focused monkeypatch, but artifact download and byte-level validation remain
+  intentionally unexercised in offline tests.
+
+## Review fixes: RED evidence
+
+Command:
+
+```text
+python3 -m pytest tests/test_model.py tests/test_losses.py -v
+```
+
+Observed after adding review regressions and before changing production code:
+
+```text
+9 failed, 21 passed, 1 warning in 6.39s
+```
+
+The failures demonstrated:
+
+- B1-B5 incorrectly reported `decoder_hidden_size=256` instead of `768`
+- default pretrained B2 construction rejected the missing implicit pin
+- decoder widths `0` and `1` did not produce the intended validation error
+- decoder width `10` was rejected by an artificial divisibility restriction
+
+The normalized-similarity hook test, FiLM/FPN/texture wiring test, and exact
+boundary oracle passed during RED. Those tests strengthen regression coverage
+for behavior that was already correct rather than claiming a corresponding
+production defect.
+
+## Review fixes: GREEN evidence
+
+Focused verification:
+
+```text
+python3 -m pytest tests/test_model.py tests/test_losses.py -v
+30 passed in 5.50s
+```
+
+Full verification:
+
+```text
+python3 -m pytest -v
+104 passed in 6.62s
+```
+
+Review-fix commit:
+
+- `f98d971` — `fix: pin and verify query segmenter architecture`
