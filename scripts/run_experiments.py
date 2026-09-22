@@ -166,6 +166,28 @@ def _verify_challenge_revision(
             f"challenge revision mismatch: expected {expected_revision}, "
             f"found {actual_revision}"
         )
+    evaluator_path = challenge_dir / "evaluate.py"
+    try:
+        committed_evaluator = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(challenge_dir),
+                "show",
+                f"{expected_revision}:evaluate.py",
+            ],
+            check=True,
+            capture_output=True,
+        ).stdout
+        working_evaluator = evaluator_path.read_bytes()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            f"cannot verify committed evaluator bytes at {evaluator_path}"
+        ) from exc
+    if working_evaluator != committed_evaluator:
+        raise RuntimeError(
+            "challenge evaluate.py is modified relative to the pinned revision"
+        )
 
 
 def run_baseline(config_path: str | Path) -> dict[str, Any]:

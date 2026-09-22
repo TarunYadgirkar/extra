@@ -192,6 +192,7 @@ def test_baseline_runner_full_subcommand_uses_label_free_inputs(tmp_path):
     assert metrics["summary"]["document_macro_iou"] == 0.25
     with Image.open(run_dir / "predictions" / "example-1.png") as prediction:
         assert prediction.size == (28, 20)
+        assert prediction.mode == "L"
         assert set(np.asarray(prediction).ravel()).issubset({0, 255})
 
 
@@ -219,6 +220,39 @@ def test_runner_rejects_mismatched_challenge_revision(tmp_path):
 
     with pytest.raises(RuntimeError, match="revision"):
         experiments.run_baseline(config_path)
+
+
+def test_runner_rejects_modified_evaluator_at_matching_head(tmp_path):
+    data_root = tmp_path / "dataset"
+    data_root.mkdir()
+    Image.fromarray(np.full((20, 28), 255, np.uint8)).save(data_root / "page.png")
+    inputs = tmp_path / "inputs.json"
+    _write_inputs(inputs, [_example()])
+    evaluation_manifest = tmp_path / "val.json"
+    evaluation_manifest.write_text("{}", encoding="utf-8")
+    challenge_dir = tmp_path / "challenge"
+    revision = _fake_challenge(challenge_dir)
+    (challenge_dir / "evaluate.py").write_text(
+        "raise RuntimeError('modified evaluator executed')\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "baseline.yaml"
+    run_dir = tmp_path / "run"
+    _write_config(
+        config_path,
+        challenge_dir=challenge_dir,
+        revision=revision,
+        inputs=inputs,
+        evaluation_manifest=evaluation_manifest,
+        data_root=data_root,
+        run_dir=run_dir,
+        max_dimension=None,
+    )
+
+    with pytest.raises(RuntimeError, match="evaluate.py.*modified"):
+        experiments.run_baseline(config_path)
+
+    assert not (run_dir / "metrics.json").exists()
 
 
 def test_resize_maps_query_with_actual_axis_scales_and_stays_registered(
@@ -275,3 +309,16 @@ def test_native_resolution_is_the_default():
     assert "inputs" in config
     assert "evaluation_manifest" in config
     assert "manifest" not in config
+
+
+def test_resource_bounded_evaluation_config_is_explicit():
+    config = yaml.safe_load(
+        (
+            Path(__file__).parents[1] / "configs/baseline-eval-1600.yaml"
+        ).read_text()
+    )
+
+    assert config["max_dimension"] == 1600
+    assert config["challenge_revision"] == OFFICIAL_REVISION
+    assert config["inputs"] == "../validation-inputs.json"
+    assert config["evaluation_manifest"] == "../dataset/val.json"
