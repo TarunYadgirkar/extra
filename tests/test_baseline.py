@@ -1,10 +1,26 @@
 import numpy as np
 from PIL import Image
+from pathlib import Path
+import subprocess
+import sys
 import yaml
 
 from hatchmatch.baseline import baseline_probability
 from hatchmatch.contracts import Box
 from scripts.run_experiments import run_baseline
+
+
+def test_experiment_runner_supports_direct_script_invocation():
+    project_root = Path(__file__).parents[1]
+
+    completed = subprocess.run(
+        [sys.executable, "scripts/run_experiments.py", "--help"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_baseline_prefers_matching_orientation():

@@ -9,6 +9,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import cv2
 import numpy as np
 from PIL import Image
