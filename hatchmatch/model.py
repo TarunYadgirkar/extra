@@ -11,12 +11,15 @@ from transformers import SegformerConfig, SegformerModel
 
 
 _MIT_VARIANTS = {
-    "nvidia/mit-b0": ((32, 64, 160, 256), (2, 2, 2, 2)),
-    "nvidia/mit-b1": ((64, 128, 320, 512), (2, 2, 2, 2)),
-    "nvidia/mit-b2": ((64, 128, 320, 512), (3, 4, 6, 3)),
-    "nvidia/mit-b3": ((64, 128, 320, 512), (3, 4, 18, 3)),
-    "nvidia/mit-b4": ((64, 128, 320, 512), (3, 8, 27, 3)),
-    "nvidia/mit-b5": ((64, 128, 320, 512), (3, 6, 40, 3)),
+    "nvidia/mit-b0": ((32, 64, 160, 256), (2, 2, 2, 2), 256),
+    "nvidia/mit-b1": ((64, 128, 320, 512), (2, 2, 2, 2), 768),
+    "nvidia/mit-b2": ((64, 128, 320, 512), (3, 4, 6, 3), 768),
+    "nvidia/mit-b3": ((64, 128, 320, 512), (3, 4, 18, 3), 768),
+    "nvidia/mit-b4": ((64, 128, 320, 512), (3, 8, 27, 3), 768),
+    "nvidia/mit-b5": ((64, 128, 320, 512), (3, 6, 40, 3), 768),
+}
+_PRETRAINED_REVISIONS = {
+    "nvidia/mit-b2": "3bb39e8739149c3777d0325349b2a6c32c6413db",
 }
 
 
@@ -32,18 +35,22 @@ def _offline_config(backbone: str) -> SegformerConfig:
             raise ValueError(
                 f"no offline configuration is available for backbone {backbone!r}"
             ) from exc
-    hidden_sizes, depths = variant
+    hidden_sizes, depths, decoder_hidden_size = variant
     return SegformerConfig(
         hidden_sizes=list(hidden_sizes),
         depths=list(depths),
-        decoder_hidden_size=256,
+        decoder_hidden_size=decoder_hidden_size,
         output_hidden_states=True,
     )
 
 
 class _ConvBlock(nn.Sequential):
     def __init__(self, input_channels: int, output_channels: int) -> None:
-        groups = min(8, output_channels)
+        groups = next(
+            candidate
+            for candidate in range(min(8, output_channels), 0, -1)
+            if output_channels % candidate == 0
+        )
         super().__init__(
             nn.Conv2d(
                 input_channels,
@@ -69,9 +76,11 @@ class QuerySegFormer(nn.Module):
         decoder_channels: int = 128,
     ) -> None:
         super().__init__()
-        if decoder_channels <= 0 or decoder_channels % min(8, decoder_channels):
-            raise ValueError("decoder_channels must be positive and divisible by 8")
+        if type(decoder_channels) is not int or decoder_channels < 2:
+            raise ValueError("decoder_channels must be an integer of at least 2")
         if pretrained:
+            if revision is None:
+                revision = _PRETRAINED_REVISIONS.get(backbone)
             if revision is None or re.fullmatch(r"[0-9a-fA-F]{40}", revision) is None:
                 raise ValueError(
                     "pretrained weights require a pinned 40-character revision"

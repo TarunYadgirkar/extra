@@ -69,6 +69,20 @@ def test_masked_boundary_loss_rewards_matching_known_edges():
     assert matching < flat
 
 
+def test_masked_boundary_loss_matches_known_pair_numerical_oracle():
+    probabilities = torch.tensor([[[[0.1, 0.4, 0.9, 0.2, 0.6]]]])
+    logits = torch.logit(probabilities)
+    target = torch.tensor([[[[0.0, 1.0, 0.0, 1.0, 1.0]]]])
+    known = torch.tensor([[[[1.0, 1.0, 0.0, 1.0, 1.0]]]])
+    # Only pairs (0, 1) and (3, 4) have two known endpoints. Their errors are
+    # abs(0.3 - 1.0) and abs(0.4 - 0.0), normalized by two valid pairs.
+    expected = torch.tensor((0.7 + 0.4) / 2.0)
+
+    actual = masked_boundary_loss(logits, target, known)
+
+    torch.testing.assert_close(actual, expected)
+
+
 def test_segmentation_loss_is_weighted_sum_of_all_components():
     logits = torch.tensor([[[[-1.0, 0.5], [2.0, -0.5]]]])
     target = torch.tensor([[[[0.0, 1.0], [1.0, 0.0]]]])
