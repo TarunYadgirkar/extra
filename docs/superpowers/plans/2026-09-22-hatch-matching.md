@@ -174,6 +174,8 @@ git commit -m "feat: enforce label-free input and binary output contracts"
 **Files:**
 - Create: `hatchmatch/features.py`
 - Create: `hatchmatch/baseline.py`
+- Create: `scripts/run_experiments.py`
+- Create: `configs/baseline.yaml`
 - Create: `tests/test_features.py`
 - Create: `tests/test_baseline.py`
 
@@ -212,14 +214,16 @@ Convert to float ink intensity, apply CLAHE, then compute foreground density, di
 
 - [ ] **Step 4: Verify baseline and record official score**
 
-Run: `python -m pytest tests/test_features.py tests/test_baseline.py -v && python scripts/run_experiments.py baseline --config configs/baseline.yaml`
+Add a minimal `baseline` subcommand to `scripts/run_experiments.py`, then run:
+
+`python -m pytest tests/test_features.py tests/test_baseline.py -v && python scripts/run_experiments.py baseline --config configs/baseline.yaml`
 
 Expected: tests PASS and `runs/baseline/metrics.json` contains `summary.document_macro_iou`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add hatchmatch/features.py hatchmatch/baseline.py tests/test_features.py tests/test_baseline.py configs/baseline.yaml
+git add hatchmatch/features.py hatchmatch/baseline.py scripts/run_experiments.py tests/test_features.py tests/test_baseline.py configs/baseline.yaml
 git commit -m "feat: add multiscale texture baseline"
 ```
 
@@ -372,7 +376,7 @@ Run: `torchrun --standalone --nproc_per_node=1 -m hatchmatch.train --config conf
 
 Expected: checkpoint and metadata are written, then verified by `tests/test_checkpoints.py`.
 
-Run: `python scripts/run_experiments.py train-folds --configs configs/train-b2.yaml configs/train-b4.yaml`
+Run: `for config in configs/train-b2.yaml configs/train-b4.yaml; do for fold in 0 1 2 3 4; do torchrun --standalone --nproc_per_node=auto -m hatchmatch.train --config "$config" --fold "$fold"; done; done`
 
 Expected: all configured fold/seed checkpoints have valid SHA-256 sidecars.
 
@@ -468,7 +472,7 @@ Fit logistic fusion on out-of-fold channels only: neural probability, classical 
 
 - [ ] **Step 4: Run tests and search**
 
-Run: `python -m pytest tests/test_calibrate.py -v && python scripts/run_experiments.py calibrate --config configs/search.yaml`
+Run: `python -m pytest tests/test_calibrate.py -v && python -m hatchmatch.calibrate --config configs/search.yaml`
 
 Expected: PASS and `runs/calibration/best.json` records objective, recall, study seed, and parameters.
 
@@ -537,7 +541,7 @@ git commit -m "feat: add challenge-compatible inference CLI"
 ### Task 10: Ablations, final ensemble, and score gate
 
 **Files:**
-- Create: `scripts/run_experiments.py`
+- Modify: `scripts/run_experiments.py`
 - Create: `tests/test_experiments.py`
 - Create: `runs/.gitignore`
 
