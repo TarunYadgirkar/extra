@@ -7,10 +7,10 @@ import json
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from itertools import islice
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image, UnidentifiedImageError
@@ -19,7 +19,7 @@ from torch.utils.data import Dataset
 
 from hatchmatch.augment import augment_training_sample
 from hatchmatch.contracts import Box
-from hatchmatch.features import _iter_texture_channels
+from hatchmatch.features import compact_texture_channels
 
 TRAINING_SCHEMA = "hatch-matching-challenge/v1"
 FOLD_SCHEMA = "hatchmatch-group-folds/v1"
@@ -42,7 +42,9 @@ SAMPLING_SCHEDULE = (
     "blank",
     "random",
 )
-_TEXTURE_CHANNEL_INDICES = frozenset({0, 2, 6, 9})
+BLANK_NEIGHBORHOOD_SIZE = 9
+BLANK_MAX_INK_AVERAGE = 5
+HARD_NEGATIVE_MIN_INK_AVERAGE = 20
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,8 @@ class TrainingLabels:
 
     masks: Mapping[str, Path | None]
     boxes: Mapping[str, tuple[Box, ...]]
+    explicit_known: bool = False
+    explicit_blank: bool = False
 
 
 @dataclass(frozen=True)
@@ -83,6 +87,7 @@ class _ExampleArrays:
     target: np.ndarray
     known: np.ndarray
     blank: np.ndarray
+    explicit_blank: bool
 
 
 def _mapping_value(example: object, field: str, index: int) -> object:
@@ -331,7 +336,7 @@ def load_training_examples(
                 if boxes_key in raw_labels
                 else ()
             )
-        if not any(masks.values()) and not any(label_boxes.values()):
+        if not raw_labels:
             raise ValueError(f"example {index} has no training labels")
 
         examples.append(
@@ -344,7 +349,18 @@ def load_training_examples(
                 height=height,
                 query_box=query_box,
                 context_boxes=context_boxes,
-                labels=TrainingLabels(masks=masks, boxes=label_boxes),
+                labels=TrainingLabels(
+                    masks=masks,
+                    boxes=label_boxes,
+                    explicit_known=(
+                        "known_mask" in raw_labels
+                        or "known_boxes" in raw_labels
+                    ),
+                    explicit_blank=(
+                        "blank_mask" in raw_labels
+                        or "blank_boxes" in raw_labels
+                    ),
+                ),
             )
         )
     return examples
@@ -456,21 +472,30 @@ def _sample_mask(
     return y, x
 
 
-def _compact_texture(gray: np.ndarray) -> np.ndarray:
-    height, width = gray.shape
-    box = Box(0, 0, width, height)
-    selected = [
-        channel
-        for index, channel in enumerate(
-            islice(_iter_texture_channels(gray, box), 10)
-        )
-        if index in _TEXTURE_CHANNEL_INDICES
-    ]
-    return np.stack(selected, axis=0).astype(np.float32, copy=False)
+def _neighborhood_ink_average(gray: np.ndarray) -> np.ndarray:
+    ink = np.where(gray < 245, 255, 0).astype(np.uint8)
+    return cv2.boxFilter(
+        ink,
+        cv2.CV_8U,
+        (BLANK_NEIGHBORHOOD_SIZE, BLANK_NEIGHBORHOOD_SIZE),
+        normalize=True,
+        borderType=cv2.BORDER_REFLECT,
+    )
 
 
 class HatchTileDataset(Dataset[dict[str, torch.Tensor]]):
-    """Deterministically sample labeled drawing tiles at a 4:3:2:1 ratio."""
+    """Sample semantically realized tiles in deterministic 4:3:2:1 blocks.
+
+    Every complete aligned block of ten indices contains four positive, three
+    hard-negative, two blank, and one random-known request in a seeded order.
+    A partial final block is the deterministic prefix of its seeded order. If
+    the block's initial example lacks the requested domain, examples are
+    searched deterministically; absence from the entire dataset is an error.
+
+    ``cache_size`` bounds retained full-resolution examples per dataset
+    instance and therefore per worker. It defaults to one to avoid retaining
+    multiple large drawings, and callers may set it to zero.
+    """
 
     def __init__(
         self,
@@ -481,7 +506,7 @@ class HatchTileDataset(Dataset[dict[str, torch.Tensor]]):
         samples_per_epoch: int | None = None,
         seed: int = 0,
         augment: bool = True,
-        cache_size: int = 2,
+        cache_size: int = 1,
     ) -> None:
         if not examples or not all(
             isinstance(example, TrainingExample) for example in examples
@@ -525,6 +550,13 @@ class HatchTileDataset(Dataset[dict[str, torch.Tensor]]):
         return self.samples_per_epoch
 
     def set_epoch(self, epoch: int) -> None:
+        """Set deterministic epoch state before creating worker iterators.
+
+        Persistent worker processes retain their copied dataset state. Callers
+        using them must recreate the worker iterator after ``set_epoch``;
+        non-persistent workers inherit the new epoch normally.
+        """
+
         if type(epoch) is not int or epoch < 0:
             raise ValueError("epoch must be a non-negative integer")
         self.epoch = epoch
@@ -532,7 +564,13 @@ class HatchTileDataset(Dataset[dict[str, torch.Tensor]]):
     def sample_kind(self, index: int) -> str:
         if type(index) is not int or not 0 <= index < len(self):
             raise IndexError(index)
-        return SAMPLING_SCHEDULE[index % len(SAMPLING_SCHEDULE)]
+        block, offset = divmod(index, len(SAMPLING_SCHEDULE))
+        schedule = list(SAMPLING_SCHEDULE)
+        rng = np.random.default_rng(
+            np.random.SeedSequence([self.seed, self.epoch, block, 17])
+        )
+        rng.shuffle(schedule)
+        return schedule[offset]
 
     def _load_arrays(self, index: int) -> _ExampleArrays:
         cached = self._cache.get(index)
@@ -546,17 +584,23 @@ class HatchTileDataset(Dataset[dict[str, torch.Tensor]]):
         positive = _load_region(example, "positive")
         negative = _load_region(example, "negative")
         blank = _load_region(example, "blank")
-        explicit_known = (
-            example.labels.masks["known"] is not None
-            or bool(example.labels.boxes["known"])
-        )
-        known = _load_region(example, "known")
-        if not explicit_known:
-            known = positive | negative | blank
-        if np.any(positive & ~known):
-            raise ValueError(f"example {example.id!r} positive labels leave known domain")
         if np.any(positive & (negative | blank)):
-            raise ValueError(f"example {example.id!r} has contradictory labels")
+            raise ValueError(
+                f"{example.id}: positive and negative/blank labels overlap"
+            )
+        if example.labels.explicit_known:
+            known = _load_region(example, "known")
+            labeled = positive.copy()
+            labeled |= negative
+            labeled |= blank
+            if np.any(labeled & ~known):
+                raise ValueError(
+                    f"{example.id}: label lies outside the explicit known domain"
+                )
+        else:
+            known = positive.copy()
+            known |= negative
+            known |= blank
 
         _exclude_support(known, example)
         _exclude_support(positive, example)
@@ -577,6 +621,7 @@ class HatchTileDataset(Dataset[dict[str, torch.Tensor]]):
             target=positive,
             known=known,
             blank=blank,
+            explicit_blank=example.labels.explicit_blank,
         )
         if self.cache_size:
             self._cache[index] = arrays
@@ -591,29 +636,53 @@ class HatchTileDataset(Dataset[dict[str, torch.Tensor]]):
         )
         return np.random.default_rng(sequence)
 
-    def _center(
+    def _candidate_mask(
         self,
         arrays: _ExampleArrays,
         kind: str,
-        rng: np.random.Generator,
-    ) -> tuple[int, int]:
+    ) -> np.ndarray:
         negative = arrays.known & ~arrays.target
         if kind == "positive":
-            candidate = arrays.target
-        elif kind == "hard_negative":
-            candidate = negative & ~arrays.blank & (arrays.image < 245)
-            if not candidate.any():
-                candidate = negative & ~arrays.blank
-        elif kind == "blank":
-            candidate = arrays.blank | (negative & (arrays.image >= 245))
-        else:
-            candidate = arrays.known
-        center = _sample_mask(candidate, rng)
-        if center is None:
-            center = _sample_mask(arrays.known, rng)
-        if center is None:
-            raise RuntimeError("known-pixel sampling unexpectedly failed")
-        return center
+            return arrays.target
+        if kind == "random":
+            return arrays.known
+
+        ink_average = _neighborhood_ink_average(arrays.image)
+        if kind == "hard_negative":
+            return (
+                negative
+                & ~arrays.blank
+                & (ink_average >= HARD_NEGATIVE_MIN_INK_AVERAGE)
+            )
+        if kind == "blank":
+            if arrays.explicit_blank:
+                return arrays.blank
+            return negative & (ink_average <= BLANK_MAX_INK_AVERAGE)
+        raise ValueError(f"unsupported sampling kind: {kind!r}")
+
+    def _sample_location(
+        self,
+        index: int,
+        kind: str,
+    ) -> tuple[_ExampleArrays, tuple[int, int]]:
+        block = index // len(SAMPLING_SCHEDULE)
+        start_rng = np.random.default_rng(
+            np.random.SeedSequence([self.seed, self.epoch, block, 29])
+        )
+        start = int(start_rng.integers(0, len(self.examples)))
+        center_rng = self._rng(index, 0)
+        for offset in range(len(self.examples)):
+            example_index = (start + offset) % len(self.examples)
+            arrays = self._load_arrays(example_index)
+            center = _sample_mask(
+                self._candidate_mask(arrays, kind),
+                center_rng,
+            )
+            if center is not None:
+                return arrays, center
+        raise ValueError(
+            f"no training example has {kind} sampling candidates"
+        )
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         if type(index) is not int:
@@ -623,9 +692,8 @@ class HatchTileDataset(Dataset[dict[str, torch.Tensor]]):
         if not 0 <= index < len(self):
             raise IndexError(index)
 
-        example_index = (index // len(SAMPLING_SCHEDULE)) % len(self.examples)
-        arrays = self._load_arrays(example_index)
-        center = self._center(arrays, self.sample_kind(index), self._rng(index, 0))
+        kind = self.sample_kind(index)
+        arrays, center = self._sample_location(index, kind)
         image = _crop_with_padding(
             arrays.image,
             center=center,
@@ -669,7 +737,9 @@ class HatchTileDataset(Dataset[dict[str, torch.Tensor]]):
         query_tensor = torch.from_numpy(
             np.repeat(query[None, :, :], 3, axis=0).astype(np.float32) / 255.0
         )
-        texture_tensor = torch.from_numpy(_compact_texture(image))
+        texture_tensor = torch.from_numpy(
+            np.moveaxis(compact_texture_channels(image), -1, 0).copy()
+        )
         target_tensor = torch.from_numpy(target[None].astype(np.float32))
         known_tensor = torch.from_numpy(known[None].astype(np.float32))
         return {

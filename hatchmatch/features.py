@@ -13,6 +13,7 @@ ORIENTATIONS = tuple(np.linspace(0.0, np.pi, 12, endpoint=False))
 WAVELENGTHS = (4.0, 6.0, 9.0, 13.0)
 SCALE_FACTORS = (0.75, 1.0, 1.5)
 LOCAL_RADII = (2, 4, 8)
+COMPACT_CHANNEL_INDICES = (0, 2, 6, 9)
 
 
 def _validate_inputs(gray: np.ndarray, query_box: Box) -> None:
@@ -152,3 +153,22 @@ def texture_channels(gray: np.ndarray, query_box: Box) -> np.ndarray:
     """Return ``(height, width, channels)`` texture features in ``[0, 1]``."""
 
     return np.stack(tuple(_iter_texture_channels(gray, query_box)), axis=-1)
+
+
+def compact_texture_channels(gray: np.ndarray) -> np.ndarray:
+    """Return four inexpensive spatial texture channels as ``(H, W, 4)``."""
+
+    if not isinstance(gray, np.ndarray) or gray.ndim != 2:
+        raise ValueError("gray must be a two-dimensional NumPy array")
+    height, width = gray.shape
+    if height == 0 or width == 0:
+        raise ValueError("gray must not be empty")
+    full_box = Box(0, 0, width, height)
+    wanted = set(COMPACT_CHANNEL_INDICES)
+    selected: list[np.ndarray] = []
+    for index, channel in enumerate(_iter_texture_channels(gray, full_box)):
+        if index in wanted:
+            selected.append(channel)
+        if index >= COMPACT_CHANNEL_INDICES[-1]:
+            break
+    return np.stack(selected, axis=-1).astype(np.float32, copy=False)
