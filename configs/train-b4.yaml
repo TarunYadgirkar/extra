@@ -1,0 +1,37 @@
+folds: [0, 1, 2, 3, 4]
+seeds: [20260922, 20260923, 20260924]
+output_dir: ../runs/train-b4
+
+model:
+  backbone: nvidia/mit-b4
+  pretrained: true
+  revision: 3844ddaa13d9ce98816bacb904688a5284f164af
+  decoder_channels: 128
+
+data:
+  manifest: ../dataset/train.json
+  root: ../dataset
+  fold_manifest: ../runs/folds.json
+  fold_seed: 20260922
+  checksum_file: ../dataset/checksums.json
+  tile_size: 256
+  query_size: 96
+  validation_size: 256
+  cache_size: 1
+  workers: 4
+
+training:
+  epochs: 50
+  samples_per_epoch: 2048
+  batch_size: 1
+  validation_batch_size: 1
+  learning_rate: 0.00004
+  weight_decay: 0.01
+  gradient_accumulation: 8
+  gradient_clip_norm: 1.0
+  ema_decay: 0.999
+  amp: true
+  threshold: 0.5
+  early_stopping_patience: 8
+  early_stopping_min_delta: 0.0001
+  max_steps: null
