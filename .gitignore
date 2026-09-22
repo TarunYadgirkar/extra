@@ -3,3 +3,9 @@
 .pytest_cache/
 *.egg-info/
 __pycache__/
+challenge/
+dataset/
+dataset.tar.gz
+predictions/
+runs/
+validation-inputs.json

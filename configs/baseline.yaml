@@ -1,0 +1,5 @@
+challenge_dir: ../challenge
+manifest: ../dataset/val.json
+data_root: ../dataset
+run_dir: ../runs/baseline
+threshold: 0.5
