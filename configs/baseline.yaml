@@ -3,3 +3,4 @@ manifest: ../dataset/val.json
 data_root: ../dataset
 run_dir: ../runs/baseline
 threshold: 0.5
+max_dimension: 1600

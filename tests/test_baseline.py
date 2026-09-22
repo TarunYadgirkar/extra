@@ -92,6 +92,7 @@ Path(args.output).write_text(
                 "data_root": str(data_root),
                 "run_dir": str(run_dir),
                 "threshold": 0.5,
+                "max_dimension": 16,
             }
         ),
         encoding="utf-8",

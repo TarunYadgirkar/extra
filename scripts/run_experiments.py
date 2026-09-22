@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 from PIL import Image
 import yaml
@@ -21,6 +22,7 @@ CONFIG_KEYS = {
     "challenge_dir",
     "manifest",
     "data_root",
+    "max_dimension",
     "run_dir",
     "threshold",
 }
@@ -53,7 +55,10 @@ def _load_config(path: Path) -> dict[str, Any]:
     ):
         raise ValueError("config threshold must be a finite number in [0, 1]")
     config["threshold"] = float(threshold)
-    for field in CONFIG_KEYS - {"threshold"}:
+    max_dimension = config["max_dimension"]
+    if type(max_dimension) is not int or max_dimension <= 0:
+        raise ValueError("config max_dimension must be a positive integer")
+    for field in CONFIG_KEYS - {"threshold", "max_dimension"}:
         config[field] = _config_path(config[field], path.parent, field)
     return config
 
@@ -82,6 +87,7 @@ def _predict(
     data_root: Path,
     predictions: Path,
     threshold: float,
+    max_dimension: int,
 ) -> None:
     predictions.mkdir(parents=True, exist_ok=True)
     for stale in predictions.glob("*.png"):
@@ -92,8 +98,14 @@ def _predict(
         if not isinstance(identifier, str) or not identifier:
             raise ValueError("manifest example id must be non-empty text")
         width, height = row.get("width"), row.get("height")
-        if type(width) is not int or type(height) is not int:
-            raise ValueError(f"{identifier}: width and height must be integers")
+        if (
+            type(width) is not int
+            or type(height) is not int
+            or min(width, height) <= 0
+        ):
+            raise ValueError(
+                f"{identifier}: width and height must be positive integers"
+            )
         raw_box = row.get("query_box")
         if not isinstance(raw_box, list) or len(raw_box) != 4:
             raise ValueError(f"{identifier}: query_box must contain four coordinates")
@@ -110,7 +122,35 @@ def _predict(
                 f"declared {(height, width)}"
             )
 
-        probability = baseline_probability(gray, query_box)
+        if max(width, height) > max_dimension:
+            scale = max_dimension / max(width, height)
+            working_width = max(1, int(round(width * scale)))
+            working_height = max(1, int(round(height * scale)))
+            working_gray = cv2.resize(
+                gray,
+                (working_width, working_height),
+                interpolation=cv2.INTER_AREA,
+            )
+            working_box = Box(
+                min(working_width - 1, int(np.floor(query_box.x0 * scale))),
+                min(working_height - 1, int(np.floor(query_box.y0 * scale))),
+                min(
+                    working_width,
+                    max(1, int(np.ceil(query_box.x1 * scale))),
+                ),
+                min(
+                    working_height,
+                    max(1, int(np.ceil(query_box.y1 * scale))),
+                ),
+            )
+            probability = baseline_probability(working_gray, working_box)
+            probability = cv2.resize(
+                probability,
+                (width, height),
+                interpolation=cv2.INTER_LINEAR,
+            )
+        else:
+            probability = baseline_probability(gray, query_box)
         write_binary_png(
             probability >= threshold,
             predictions / f"{identifier}.png",
@@ -135,6 +175,7 @@ def run_baseline(config_path: str | Path) -> dict[str, Any]:
         data_root,
         predictions,
         config["threshold"],
+        config["max_dimension"],
     )
     metrics_path.unlink(missing_ok=True)
     subprocess.run(
