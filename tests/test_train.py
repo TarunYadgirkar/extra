@@ -132,7 +132,7 @@ def test_gradient_accumulation_and_clipping_match_single_averaged_update() -> No
 
     for sample in (first, second):
         (nn.functional.mse_loss(accumulated(sample), target) / 2).backward()
-    norm = optimizer_update(
+    result = optimizer_update(
         accumulated,
         accumulated_optimizer,
         scaler=None,
@@ -148,7 +148,8 @@ def test_gradient_accumulation_and_clipping_match_single_averaged_update() -> No
     torch.nn.utils.clip_grad_norm_(reference.parameters(), 0.25)
     reference_optimizer.step()
 
-    assert norm > 0.25
+    assert result.stepped
+    assert result.grad_norm > 0.25
     torch.testing.assert_close(accumulated.weight, reference.weight)
 
 

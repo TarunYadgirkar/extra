@@ -47,3 +47,24 @@ def test_sidecar_tampering_is_rejected_when_expected_hash_is_omitted(
 
     with pytest.raises(ValueError, match="SHA-256"):
         load_verified_checkpoint(path)
+
+
+def test_verified_load_hashes_and_deserializes_one_byte_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "model.pt"
+    digest = save_checkpoint(path, {"state_dict": {}})
+    original = Path.read_bytes
+    reads = 0
+
+    def counted_read_bytes(candidate: Path) -> bytes:
+        nonlocal reads
+        reads += 1
+        return original(candidate)
+
+    monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
+
+    load_verified_checkpoint(path, digest)
+
+    assert reads == 1
