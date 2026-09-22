@@ -12,7 +12,7 @@ The score is an optimization target, not a guaranteed outcome. The implementatio
 - Inference must never read labels, expected counts, or private data.
 - Predictions must cover the full native drawing and use accepted binary PNG encodings.
 - Model selection may use public training data and public validation results, with that use disclosed.
-- The primary execution target is one CUDA-capable GPU. A slower CPU path must remain functional.
+- Accuracy takes priority over compute cost. Training and model selection may use multiple GPUs and inference may use an ensemble, while a slower reduced CPU path must remain functional.
 - External pretrained weights and all other artifacts must be pinned, checksummed, and disclosed.
 
 ## Considered Approaches
@@ -77,7 +77,7 @@ The calibrated map is thresholded using global parameters selected for document-
 --output-dir PATH
 ```
 
-It creates exactly one native-size binary PNG per request. Device selection defaults to CUDA when available and otherwise uses CPU. Batch and tile sizes adapt to available memory without changing prediction semantics.
+It creates exactly one native-size binary PNG per request. Device selection uses all configured CUDA devices when available and otherwise uses CPU. Batch and tile sizes adapt to available memory without changing prediction semantics. The submitted configuration may ensemble multiple fold models and test-time transforms when ablation results justify their cost.
 
 ## Development Strategy
 
@@ -108,7 +108,7 @@ Quality gates are:
 - deterministic predictions within fixed hardware/backend settings;
 - document-grouped cross-validation reports and feature ablations;
 - official public-validation metrics, including eligible counts, precision, recall, blank false-positive rate, and document-macro IoU;
-- CPU smoke test and timed GPU run.
+- CPU smoke test and timed GPU or multi-GPU run.
 
 ## Deliverables
 
