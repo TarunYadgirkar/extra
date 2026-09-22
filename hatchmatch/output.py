@@ -54,7 +54,7 @@ def write_binary_png(
             temporary_path = Path(temporary.name)
 
         pixels = mask.astype(np.uint8) * np.uint8(255)
-        Image.fromarray(pixels, mode="L").save(temporary_path, format="PNG")
+        Image.fromarray(pixels).save(temporary_path, format="PNG")
 
         with Image.open(temporary_path) as written:
             written.load()

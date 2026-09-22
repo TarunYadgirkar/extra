@@ -21,6 +21,31 @@ def test_writer_emits_native_binary_l_png(tmp_path: Path) -> None:
         assert set(np.asarray(image).reshape(-1).tolist()) == {0, 255}
 
 
+def test_writer_does_not_pass_deprecated_mode_to_fromarray(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_fromarray = Image.fromarray
+    received_modes: list[str | None] = []
+
+    def recording_fromarray(
+        array: np.ndarray, mode: str | None = None
+    ) -> Image.Image:
+        received_modes.append(mode)
+        if mode is None:
+            return original_fromarray(array)
+        return original_fromarray(array, mode=mode)
+
+    monkeypatch.setattr(Image, "fromarray", recording_fromarray)
+
+    write_binary_png(
+        np.array([[False, True]], dtype=bool),
+        tmp_path / "mask.png",
+        (2, 1),
+    )
+
+    assert received_modes == [None]
+
+
 def test_writer_preserves_numpy_height_width_order(tmp_path: Path) -> None:
     path = tmp_path / "mask.png"
     mask = np.array([[False, True, False], [True, False, True]])

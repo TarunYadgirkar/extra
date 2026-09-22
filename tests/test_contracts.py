@@ -47,6 +47,36 @@ def test_loader_rejects_labels(tmp_path: Path) -> None:
         load_requests(path, tmp_path)
 
 
+@pytest.mark.parametrize(
+    "field",
+    ["expected_count", "positive_mask", "private_data"],
+)
+def test_loader_rejects_unexpected_top_level_fields(
+    tmp_path: Path, field: str
+) -> None:
+    path = tmp_path / "inputs.json"
+    path.write_text(
+        json.dumps({"schema": SCHEMA, "examples": [], field: "forbidden"})
+    )
+
+    with pytest.raises(ValueError, match=rf"unexpected.*{field}"):
+        load_requests(path, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["expected_count", "positive_mask", "private_data"],
+)
+def test_loader_rejects_unexpected_example_fields(
+    tmp_path: Path, field: str
+) -> None:
+    path = tmp_path / "inputs.json"
+    _write_manifest(path, [_example(**{field: "forbidden"})])
+
+    with pytest.raises(ValueError, match=rf"unexpected.*{field}"):
+        load_requests(path, tmp_path)
+
+
 def test_loader_returns_frozen_native_coordinate_contracts(tmp_path: Path) -> None:
     _write_image(tmp_path / "x.png")
     path = tmp_path / "inputs.json"

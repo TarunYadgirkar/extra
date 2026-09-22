@@ -10,6 +10,19 @@ from typing import Any
 from PIL import Image, UnidentifiedImageError
 
 SCHEMA = "hatch-matching-challenge/v1"
+MANIFEST_KEYS = frozenset({"schema", "examples"})
+EXAMPLE_KEYS = frozenset(
+    {
+        "id",
+        "document_id",
+        "kind",
+        "image",
+        "width",
+        "height",
+        "query_box",
+        "context_boxes",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -53,6 +66,17 @@ def _contains_labels(value: Any) -> bool:
     if isinstance(value, list):
         return any(_contains_labels(child) for child in value)
     return False
+
+
+def _reject_unexpected_keys(
+    value: dict[str, Any],
+    allowed: frozenset[str],
+    location: str,
+) -> None:
+    unexpected = sorted(set(value) - allowed)
+    if unexpected:
+        rendered = ", ".join(repr(key) for key in unexpected)
+        raise ValueError(f"{location} contains unexpected field(s): {rendered}")
 
 
 def _required(example: dict[str, Any], field: str, index: int) -> Any:
@@ -124,6 +148,7 @@ def load_requests(
         raise ValueError("labels are forbidden in inference inputs")
     if not isinstance(manifest, dict):
         raise ValueError("manifest must be a JSON object")
+    _reject_unexpected_keys(manifest, MANIFEST_KEYS, "manifest")
     if manifest.get("schema") != SCHEMA:
         raise ValueError(
             f"unsupported manifest schema: {manifest.get('schema')!r}"
@@ -138,6 +163,7 @@ def load_requests(
     for index, example in enumerate(examples):
         if not isinstance(example, dict):
             raise ValueError(f"example {index} must be a JSON object")
+        _reject_unexpected_keys(example, EXAMPLE_KEYS, f"example {index}")
 
         request_id = _text_field(example, "id", index)
         if request_id in seen_ids:
