@@ -50,3 +50,24 @@ def test_augmentation_does_not_mutate_inputs() -> None:
 
     for actual, expected in zip(arrays, originals, strict=True):
         np.testing.assert_array_equal(actual, expected)
+
+
+def test_shared_geometry_keeps_drawing_ink_aligned_with_target() -> None:
+    image = np.full((64, 64), 255, np.uint8)
+    image[18:46, 20:44] = 0
+    target = np.zeros((64, 64), bool)
+    target[18:46, 20:44] = True
+    known = np.ones((64, 64), bool)
+
+    result = augment_training_sample(
+        image,
+        image[18:46, 20:44],
+        target,
+        known,
+        seed=31415,
+    )
+
+    transformed_ink = result["image"] < 128
+    intersection = np.count_nonzero(transformed_ink & result["target"])
+    union = np.count_nonzero(transformed_ink | result["target"])
+    assert intersection / union > 0.7

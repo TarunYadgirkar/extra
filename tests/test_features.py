@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from hatchmatch.contracts import Box
-from hatchmatch.features import texture_channels
+from hatchmatch.features import compact_texture_channels, texture_channels
 
 
 def test_texture_channels_preserve_native_shape_and_have_finite_unit_range():
@@ -28,6 +28,17 @@ def test_texture_channels_are_deterministic_for_constant_images():
 
     np.testing.assert_array_equal(first, second)
     assert np.isfinite(first).all()
+
+
+def test_compact_texture_channels_are_public_four_channel_features():
+    gray = np.tile(np.arange(32, dtype=np.uint8), (24, 1))
+
+    compact = compact_texture_channels(gray)
+    full = texture_channels(gray, Box(0, 0, 32, 24))
+
+    assert compact.shape == (24, 32, 4)
+    assert compact.dtype == np.float32
+    np.testing.assert_array_equal(compact, full[:, :, [0, 2, 6, 9]])
 
 
 @pytest.mark.parametrize(
