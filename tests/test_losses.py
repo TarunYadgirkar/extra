@@ -39,11 +39,7 @@ def test_masked_focal_loss_matches_binary_focal_definition():
     logits = torch.zeros(1, 1, 1, 2)
     target = torch.tensor([[[[0.0, 1.0]]]])
     known = torch.ones_like(target)
-    expected = torch.tensor(
-        ((0.75 * 0.25 * torch.log(torch.tensor(2.0)))
-        + (0.25 * 0.25 * torch.log(torch.tensor(2.0))))
-        / 2
-    )
+    expected = torch.log(torch.tensor(2.0)) / 8.0
 
     actual = masked_focal_loss(logits, target, known)
 

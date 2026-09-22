@@ -11,21 +11,24 @@ def _loss_inputs(
     logits: Tensor,
     target: Tensor,
     known: Tensor,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor, Tensor]:
     if logits.shape != target.shape or logits.shape != known.shape:
         raise ValueError("logits, target, and known must have identical shapes")
     if logits.ndim != 4 or logits.shape[1] != 1:
         raise ValueError("loss inputs must have shape [B, 1, H, W]")
-    target_values = target.to(device=logits.device, dtype=logits.dtype)
     mask = (known.to(device=logits.device) == 1).to(dtype=logits.dtype)
-    return target_values, mask
+    safe_logits = torch.where(mask.bool(), logits, torch.zeros_like(logits))
+    target_values = target.to(device=logits.device, dtype=logits.dtype)
+    safe_target = torch.where(
+        mask.bool(),
+        target_values,
+        torch.zeros_like(target_values),
+    )
+    return safe_logits, safe_target, mask
 
 
-def _masked_mean(values: Tensor, mask: Tensor, logits: Tensor) -> Tensor:
-    count = mask.sum()
-    if count.item() == 0:
-        return logits.sum() * 0.0
-    return (values * mask).sum() / count
+def _masked_mean(values: Tensor, mask: Tensor) -> Tensor:
+    return (values * mask).sum() / mask.sum().clamp_min(1.0)
 
 
 def masked_focal_loss(
@@ -38,13 +41,13 @@ def masked_focal_loss(
 ) -> Tensor:
     """Return binary focal loss reduced over exactly known pixels."""
 
-    target_values, mask = _loss_inputs(logits, target, known)
+    safe_logits, target_values, mask = _loss_inputs(logits, target, known)
     cross_entropy = F.binary_cross_entropy_with_logits(
-        logits,
+        safe_logits,
         target_values,
         reduction="none",
     )
-    probability = torch.sigmoid(logits)
+    probability = torch.sigmoid(safe_logits)
     probability_correct = (
         probability * target_values + (1.0 - probability) * (1.0 - target_values)
     )
@@ -52,7 +55,7 @@ def masked_focal_loss(
         alpha * target_values + (1.0 - alpha) * (1.0 - target_values)
     )
     focal = alpha_weight * (1.0 - probability_correct).pow(gamma) * cross_entropy
-    return _masked_mean(focal, mask, logits)
+    return _masked_mean(focal, mask)
 
 
 def masked_soft_dice_loss(
@@ -64,10 +67,8 @@ def masked_soft_dice_loss(
 ) -> Tensor:
     """Return soft Dice loss with unknown probabilities excluded."""
 
-    target_values, mask = _loss_inputs(logits, target, known)
-    if mask.sum().item() == 0:
-        return logits.sum() * 0.0
-    probability = torch.sigmoid(logits)
+    safe_logits, target_values, mask = _loss_inputs(logits, target, known)
+    probability = torch.sigmoid(safe_logits)
     intersection = (probability * target_values * mask).sum()
     denominator = ((probability + target_values) * mask).sum()
     return 1.0 - (2.0 * intersection + epsilon) / (denominator + epsilon)
@@ -80,8 +81,8 @@ def masked_boundary_loss(
 ) -> Tensor:
     """Compare adjacent probability changes whose endpoints are both known."""
 
-    target_values, mask = _loss_inputs(logits, target, known)
-    probability = torch.sigmoid(logits)
+    safe_logits, target_values, mask = _loss_inputs(logits, target, known)
+    probability = torch.sigmoid(safe_logits)
 
     horizontal_mask = mask[..., :, 1:] * mask[..., :, :-1]
     horizontal_error = (
@@ -94,14 +95,12 @@ def masked_boundary_loss(
         - (target_values[..., 1:, :] - target_values[..., :-1, :]).abs()
     ).abs()
 
-    count = horizontal_mask.sum() + vertical_mask.sum()
-    if count.item() == 0:
-        return logits.sum() * 0.0
     total = (
         (horizontal_error * horizontal_mask).sum()
         + (vertical_error * vertical_mask).sum()
     )
-    return total / count
+    count = horizontal_mask.sum() + vertical_mask.sum()
+    return total / count.clamp_min(1.0)
 
 
 def masked_segmentation_loss(
