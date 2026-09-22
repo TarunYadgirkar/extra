@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "repository": "REPLACE_WITH_HTTPS_REPOSITORY_URL",
+  "commit": "REPLACE_WITH_FULL_40_CHARACTER_COMMIT",
+  "inference_command": "",
+  "environment": "",
+  "weights": [],
+  "validation_metrics": "",
+  "hardware": "",
+  "runtime_seconds": null,
+  "peak_memory_mb": null,
+  "time_spent_hours": null,
+  "external_resources": [],
+  "ai_tools": []
+}

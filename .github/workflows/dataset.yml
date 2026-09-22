@@ -1,0 +1,23 @@
+name: Released dataset integrity
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'data/release.json'
+      - 'validate_dataset.py'
+      - '.github/workflows/dataset.yml'
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python download_data.py
+      - run: python validate_dataset.py --data-root dataset

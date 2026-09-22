@@ -1,0 +1,18 @@
+{
+  "description": "Cached anonymous reference system on a separate previously exposed development suite; not the new challenge validation or private-test split",
+  "queries": 37,
+  "documents": 12,
+  "empty_target_queries": 0,
+  "document_macro_iou": 0.7373200409764458,
+  "query_macro_iou": 0.740948079419786,
+  "tp": 282394,
+  "fp": 237567,
+  "fn": 17434,
+  "tn": 27765043,
+  "global_pixel_recall": 0.9418533292420989,
+  "global_pixel_precision": 0.5431061175742027,
+  "reviewed_blank_false_positive_pixels": 0,
+  "reviewed_blank_pixels": 6488288,
+  "protocol": "Known pixels only, all supplied supports excluded; nonempty-target query means within document, then document means",
+  "independent_test_claim": false
+}

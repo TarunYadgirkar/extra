@@ -1,0 +1,27 @@
+{
+  "version": "1.0",
+  "url": "https://github.com/TruTec-AI/hatch-matching-challenge/releases/download/dataset-v1/trutec-hatch-dataset-v1.zip",
+  "bytes": 422368602,
+  "sha256": "d5c1c845898669fe3941c363db3f328ed9d50c828acf7daeed7c9b2ae74b2229",
+  "unpacked_bytes": 422203222,
+  "files": 735,
+  "total_queries_including_private": 545,
+  "public_train": {
+    "queries": 448,
+    "real_queries": 192,
+    "generated_cad_queries": 256,
+    "real_document_groups": 62,
+    "cad_base_groups": 64
+  },
+  "public_validation": {
+    "queries": 57,
+    "real_document_groups": 13
+  },
+  "private_test": {
+    "queries": 40,
+    "real_document_groups": 14,
+    "distributed": false
+  },
+  "public_assets": 729,
+  "private_asset_overlap": false
+}

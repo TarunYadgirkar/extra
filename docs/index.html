@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore real drawing examples and reviewed hatch-pattern regions from the TruTec Hatch Matching Challenge.">
+  <title>Real drawing examples · TruTec Hatch Matching Challenge</title>
+  <style>
+    :root { color-scheme: light; --ink:#142c32; --muted:#485e64; --paper:#fff; --bg:#f1f5f2; --line:#c9d7d2; --green:#00664c; --query:#875000; --negative:#9c2356; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; line-height:1.55; }
+    a { color:var(--green); text-underline-offset:.2em; }
+    a:hover { text-decoration-thickness:2px; }
+    button,select,input { font:inherit; }
+    :focus-visible { outline:3px solid #075ec6; outline-offset:4px; }
+    .skip { position:absolute; left:1rem; top:-5rem; background:#fff; padding:.6rem 1rem; z-index:20; }
+    .skip:focus { top:1rem; }
+    .wrap { max-width:1360px; margin:auto; padding:0 clamp(1rem,4vw,3rem); }
+    header { background:#fff; border-bottom:1px solid var(--line); }
+    .nav { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding-top:1.15rem; padding-bottom:1.15rem; }
+    .brand { color:var(--ink); text-decoration:none; font-size:1.2rem; font-weight:800; letter-spacing:-.04em; }
+    .brand span { font-weight:450; letter-spacing:0; color:var(--muted); margin-left:.7rem; font-size:.82rem; }
+    .repo { font-size:.88rem; font-weight:650; }
+    main { padding-top:clamp(2rem,5vw,4rem); padding-bottom:3rem; }
+    .eyebrow { color:var(--green); font-size:.73rem; font-weight:800; letter-spacing:.14em; text-transform:uppercase; margin:0 0 .7rem; }
+    h1 { font-size:clamp(2.1rem,4.5vw,3.8rem); max-width:850px; line-height:1.08; letter-spacing:-.045em; margin:0 0 1rem; font-weight:720; }
+    .intro { max-width:750px; color:var(--muted); font-size:1.08rem; margin:0; }
+    .notice { display:flex; gap:.8rem; align-items:flex-start; border-left:4px solid var(--green); background:#e4eee8; padding:1rem 1.15rem; margin:1.5rem 0 2rem; max-width:920px; font-size:.93rem; }
+    .notice strong { white-space:nowrap; }
+    .toolbar { display:flex; gap:1rem; align-items:flex-end; justify-content:space-between; margin:0 0 1.2rem; }
+    label { display:block; font-weight:650; font-size:.82rem; margin-bottom:.35rem; }
+    select { width:100%; min-height:44px; border:1px solid #718b82; border-radius:7px; padding:.55rem 2rem .55rem .7rem; background:#fff; color:var(--ink); }
+    .chooser { min-width:260px; max-width:430px; flex:1; }
+    .paging { display:flex; gap:.55rem; align-items:center; }
+    button { min-height:44px; min-width:44px; border:1px solid #718b82; border-radius:7px; background:#fff; color:var(--ink); padding:.55rem .9rem; cursor:pointer; font-weight:650; }
+    button:hover:not(:disabled) { background:#e0eee7; }
+    button:disabled { color:#6a7773; background:#e7eeea; cursor:default; border-color:#bcc8c1; }
+    #position { min-width:4.4rem; text-align:center; color:var(--muted); font-size:.85rem; font-variant-numeric:tabular-nums; }
+    #status { color:var(--muted); font-size:.9rem; min-height:1.5rem; margin:.7rem 0 1rem; }
+    #status.error { color:#8c1b26; }
+    .manual { padding:1rem; border:1px solid #b4c8bb; background:#fff; border-radius:8px; margin-bottom:1rem; }
+    .manual p { margin:.3rem 0 .8rem; }
+    .stage { background:#fff; border:1px solid var(--line); border-radius:12px; overflow:hidden; box-shadow:0 10px 30px #173d2410; }
+    .stage-head { display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; border-bottom:1px solid var(--line); padding:1.15rem 1.3rem; }
+    h2 { font-size:1.15rem; margin:0 0 .15rem; letter-spacing:-.02em; }
+    #sample-id { color:var(--muted); font-size:.75rem; overflow-wrap:anywhere; }
+    #full-image { font-size:.82rem; flex-shrink:0; padding-top:.15rem; }
+    .legend { list-style:none; display:flex; flex-wrap:wrap; gap:.8rem 1.5rem; margin:0; padding:.8rem 1.3rem; font-size:.8rem; border-bottom:1px solid var(--line); }
+    .legend li { display:flex; align-items:center; gap:.45rem; }
+    .key { display:inline-flex; min-width:1.6rem; height:1.4rem; align-items:center; justify-content:center; border:2px solid currentColor; font-size:.72rem; font-weight:800; border-radius:3px; }
+    .q { color:var(--query); } .m { color:var(--green); } .n { color:var(--negative); }
+    .n.key { border-style:dashed; }
+    figure { margin:0; }
+    .drawing-wrap { position:relative; width:100%; background:#fff; }
+    #drawing { display:block; width:100%; height:auto; }
+    #annotations { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+    .overview-caption { padding:.85rem 1.3rem; margin:0; border-top:1px solid var(--line); color:var(--muted); font-size:.83rem; }
+    .crop-heading { margin:2rem 0 .25rem; font-size:1.3rem; }
+    .crop-intro { color:var(--muted); margin:0 0 1rem; font-size:.9rem; }
+    .crops { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1rem; align-items:start; }
+    .crop { background:#fff; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+    .crop-top { padding:1rem; border-top:4px solid currentColor; }
+    .crop h3 { font-size:.98rem; margin:0 0 .25rem; }
+    .crop p { color:var(--muted); font-size:.82rem; margin:0; }
+    .crop select { margin-top:.6rem; font-size:.83rem; }
+    .canvas-wrap { padding:1rem; border-top:1px solid var(--line); background:#f7faf7; }
+    canvas { display:block; max-width:100%; width:100%; height:auto; background:#fff; border:1px solid #bdcbc3; }
+    .crop figcaption { color:var(--muted); padding:0 1rem 1rem; font-size:.75rem; font-variant-numeric:tabular-nums; }
+    .empty { margin:1rem!important; }
+    .closing { display:grid; grid-template-columns:1fr 1fr; gap:2rem; margin-top:2.25rem; border-top:1px solid #b7c9bf; padding-top:1.5rem; font-size:.9rem; color:var(--muted); }
+    .closing h2 { color:var(--ink); font-size:1rem; }
+    .closing p { margin:.5rem 0 0; }
+    footer { padding:1.3rem 0; border-top:1px solid var(--line); color:var(--muted); font-size:.78rem; background:#fff; }
+    [hidden] { display:none!important; }
+    @media(max-width:760px) { .crops,.closing { grid-template-columns:1fr; } .toolbar { align-items:stretch; flex-direction:column; } .chooser { max-width:none; min-width:0; } .paging { justify-content:flex-end; } .stage-head { flex-direction:column; } .notice { display:block; } .notice strong { display:block; margin-bottom:.35rem; } .brand span { display:none; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#gallery">Skip to drawing examples</a>
+  <header><div class="wrap nav"><a class="brand" href="https://github.com/TruTec-AI/hatch-matching-challenge">TruTec<span>Hatch Matching Challenge</span></a><a class="repo" href="https://github.com/TruTec-AI/hatch-matching-challenge">Challenge &amp; code ↗</a></div></header>
+  <main class="wrap">
+    <p class="eyebrow">Inside the dataset</p>
+    <h1>A small pattern.<br>A much larger drawing.</h1>
+    <p class="intro">Start with a hatch example, then find regions with the same pattern. Explore real drawings below to see the query, a reviewed match and reviewed nonmatches.</p>
+    <div class="notice"><strong>Annotations, not predictions.</strong><span>These boxes identify reviewed example regions. Areas outside the reviewed regions are unknown—not assumed to be background or nonmatches. This gallery reports no model performance.</span></div>
+    <section id="gallery" aria-label="Interactive drawing examples" tabindex="-1">
+      <div class="toolbar">
+        <div class="chooser"><label for="example-select">Choose a drawing</label><select id="example-select" disabled><option>Loading examples…</option></select></div>
+        <div class="paging"><button id="previous" type="button" disabled aria-label="Previous drawing">← Previous</button><span id="position"></span><button id="next" type="button" disabled aria-label="Next drawing">Next →</button></div>
+      </div>
+      <p id="status" role="status" aria-live="polite">Loading the example manifest…</p>
+      <div id="manual-load" class="manual" hidden><p>Serve this folder over HTTP to load <code>examples.json</code>, or choose the JSON file below when opening this page locally. Drawing files must remain in this page’s <code>assets/</code> folder.</p><label for="manifest-file">Choose examples.json</label><input id="manifest-file" type="file" accept=".json,application/json"></div>
+      <div id="content" hidden>
+        <section class="stage" aria-labelledby="sample-title">
+          <div class="stage-head"><div><h2 id="sample-title"></h2><div id="sample-id"></div></div><a id="full-image" target="_blank" rel="noopener">Open full-resolution drawing ↗</a></div>
+          <ul class="legend"><li><span class="key q">Q</span>Input query · excluded from scoring</li><li><span class="key m">M</span>Reviewed match</li><li><span class="key n">N</span>Reviewed nonmatch</li></ul>
+          <figure><div class="drawing-wrap"><img id="drawing" alt=""><svg id="annotations" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"></svg></div><figcaption class="overview-caption">The full drawing keeps its original proportions. Colored boxes show the supplied query and reviewed regions only. Use the crops below or open the original to inspect detail.</figcaption></figure>
+        </section>
+        <h2 class="crop-heading">Compare the regions</h2><p class="crop-intro">Crops come directly from the same drawing in your browser. They retain their original aspect ratios; nothing is filled in or generated.</p>
+        <div class="crops">
+          <figure class="crop q"><div class="crop-top"><h3>Q · Query pattern</h3><p>The pattern supplied as input. Its source rectangle is not scored.</p></div><div class="canvas-wrap"><canvas id="query-canvas" role="img">Query crop from the original drawing.</canvas></div><figcaption id="query-caption"></figcaption></figure>
+          <figure class="crop m"><div class="crop-top"><h3>M · Reviewed match</h3><p>An explicitly labeled matching region.</p><label class="visually-labeled" for="match-select">Matching region</label><select id="match-select"></select></div><div id="match-wrap" class="canvas-wrap"><canvas id="match-canvas" role="img">Reviewed matching crop from the original drawing.</canvas></div><p id="match-empty" class="empty" hidden>No matching crop is supplied for this example.</p><figcaption id="match-caption"></figcaption></figure>
+          <figure class="crop n"><div class="crop-top"><h3>N · Reviewed nonmatch</h3><p>An explicitly reviewed different pattern or blank region.</p><label for="negative-select">Nonmatching region</label><select id="negative-select"></select></div><div id="negative-wrap" class="canvas-wrap"><canvas id="negative-canvas" role="img">Reviewed nonmatching crop from the original drawing.</canvas></div><p id="negative-empty" class="empty" hidden>No nonmatching crop is supplied for this example.</p><figcaption id="negative-caption"></figcaption></figure>
+        </div>
+      </div>
+    </section>
+    <div class="closing"><section><h2>What is reviewed?</h2><p>A reviewed match does not certify every similar-looking region on the page. A reviewed nonmatch does not turn the rest of the page into background. Only the released known regions are scored; supplied query and context boxes are excluded.</p></section><section><h2>Get the data. Send your results.</h2><p>Find the dataset download, submission instructions and evaluator in the challenge repository. <a href="https://github.com/TruTec-AI/hatch-matching-challenge">Open the challenge repository →</a></p></section></div>
+  </main>
+  <footer><div class="wrap">TruTec Hatch Matching Challenge · Real drawing inputs, explicitly reviewed regions · No model predictions shown</div></footer>
+  <!-- A static build may insert the exact public examples array here. Otherwise
+       the page loads examples.json beside this file. Never insert private paths. -->
+  <script id="examples-data" type="application/json">[]</script>
+  <script>
+    'use strict';
+    const byId = (id) => document.getElementById(id);
+    const status = byId('status');
+    let examples = [], currentIndex = 0, generation = 0, loadedImage = null;
+    const colors = { Q:'#875000', M:'#00664c', N:'#9c2356' };
+    function announce(message, error) { status.textContent = message; status.classList.toggle('error', !!error); }
+    function boxesValid(boxes, width, height) {
+      return Array.isArray(boxes) && boxes.every((b) => Array.isArray(b) && b.length === 4 && b.every(Number.isInteger) && b[0] >= 0 && b[1] >= 0 && b[0] < b[2] && b[1] < b[3] && b[2] <= width && b[3] <= height);
+    }
+    function validate(data) {
+      if (!Array.isArray(data) || !data.length) throw new Error('The example manifest must be a nonempty array.');
+      const ids = new Set();
+      for (const row of data) {
+        if (!row || typeof row.id !== 'string' || !row.id || ids.has(row.id) || typeof row.title !== 'string' || !row.title) throw new Error('Every example needs a unique id and title.');
+        ids.add(row.id);
+        if (!Number.isInteger(row.width) || !Number.isInteger(row.height) || row.width <= 0 || row.height <= 0) throw new Error('Invalid original image dimensions.');
+        if (typeof row.image !== 'string' || !/^assets\/[A-Za-z0-9._/-]+\.(png|jpe?g|webp)$/i.test(row.image) || row.image.split('/').includes('..')) throw new Error('Example images must use public relative assets/ paths.');
+        if (!boxesValid([row.query_box], row.width, row.height) || !boxesValid(row.positive_boxes, row.width, row.height) || !boxesValid(row.negative_boxes, row.width, row.height)) throw new Error('A review box is invalid or outside its drawing.');
+      }
+      return data;
+    }
+    function svgNode(name, attrs, text) {
+      const node = document.createElementNS('http://www.w3.org/2000/svg', name);
+      for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value));
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+    function drawOverlay(row) {
+      const svg = byId('annotations'); svg.replaceChildren(); svg.setAttribute('viewBox', '0 0 ' + row.width + ' ' + row.height);
+      const regions = [{kind:'Q',box:row.query_box,label:'Q'}]
+        .concat(row.positive_boxes.map((box, i) => ({kind:'M',box,label:'M' + (i + 1)})))
+        .concat(row.negative_boxes.map((box, i) => ({kind:'N',box,label:'N' + (i + 1)})));
+      const fontSize = row.width / 75;
+      for (const region of regions) {
+        const [x0,y0,x1,y1] = region.box;
+        const attrs = {x:x0,y:y0,width:x1-x0,height:y1-y0,fill:'none',stroke:colors[region.kind],'stroke-width':3,'vector-effect':'non-scaling-stroke'};
+        // A white under-stroke keeps the boundary visible on dark linework.
+        svg.appendChild(svgNode('rect', {...attrs,stroke:'#fff','stroke-width':5}));
+        if (region.kind === 'N') attrs['stroke-dasharray'] = '7 4';
+        svg.appendChild(svgNode('rect', attrs));
+        const labelX = Math.min(x0, row.width - fontSize * 3), labelY = Math.max(fontSize * 1.2, y0 - fontSize * .2);
+        svg.appendChild(svgNode('text', {x:labelX,y:labelY,fill:colors[region.kind],stroke:'#fff','stroke-width':fontSize * .22,'paint-order':'stroke','font-size':fontSize,'font-weight':800}, region.label));
+      }
+    }
+    function drawCrop(kind, box, label) {
+      const canvas = byId(kind + '-canvas');
+      const [x0,y0,x1,y1] = box, width = x1-x0, height = y1-y0;
+      canvas.width = width; canvas.height = height;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('This browser cannot display canvas crops. Open the full-resolution drawing instead.');
+      context.drawImage(loadedImage, x0,y0,width,height, 0,0,width,height);
+      canvas.setAttribute('aria-label', label + ', ' + width + ' by ' + height + ' original pixels, from ' + examples[currentIndex].title);
+      byId(kind + '-caption').textContent = width + ' × ' + height + ' original pixels · x ' + x0 + '–' + x1 + ', y ' + y0 + '–' + y1 + ' (exclusive end coordinates)';
+    }
+    function setRegions(kind, regions, label) {
+      const select = byId(kind + '-select'); select.replaceChildren(); select.disabled = !regions.length;
+      byId(kind + '-wrap').hidden = !regions.length; byId(kind + '-empty').hidden = !!regions.length;
+      byId(kind + '-caption').textContent = '';
+      for (let i = 0; i < regions.length; i++) {
+        const option = document.createElement('option'); option.value = String(i); option.textContent = label + ' ' + (i + 1) + ' of ' + regions.length; select.appendChild(option);
+      }
+      select.onchange = () => { try { drawCrop(kind, regions[Number(select.value)], label + ' ' + (Number(select.value) + 1)); } catch (error) { announce(error.message, true); } };
+      if (regions.length) drawCrop(kind, regions[0], label + ' 1');
+    }
+    async function show(index) {
+      currentIndex = index; const token = ++generation, row = examples[index]; loadedImage = null;
+      byId('content').hidden = true; byId('example-select').value = String(index);
+      byId('previous').disabled = index === 0; byId('next').disabled = index === examples.length - 1;
+      byId('position').textContent = (index + 1) + ' / ' + examples.length;
+      announce('Loading ' + row.title + '…');
+      try {
+        const image = new Image(); image.src = row.image; await image.decode();
+        if (token !== generation) return;
+        if (image.naturalWidth !== row.width || image.naturalHeight !== row.height) throw new Error('Image dimensions do not match the published example metadata. No annotations were displayed.');
+        loadedImage = image;
+        byId('drawing').src = row.image; byId('drawing').alt = 'Full original drawing for ' + row.title + '. Reviewed regions are marked and shown separately below.';
+        byId('drawing').width = row.width; byId('drawing').height = row.height;
+        byId('sample-title').textContent = row.title; byId('sample-id').textContent = row.id;
+        byId('full-image').href = row.image;
+        drawOverlay(row); drawCrop('query', row.query_box, 'Input query');
+        setRegions('match', row.positive_boxes, 'Reviewed match'); setRegions('negative', row.negative_boxes, 'Reviewed nonmatch');
+        byId('content').hidden = false;
+        announce(row.title + ' loaded. ' + row.positive_boxes.length + ' reviewed matching region(s), ' + row.negative_boxes.length + ' reviewed nonmatching region(s). Other regions remain unreviewed.');
+      } catch (error) { if (token === generation) announce('Could not display this drawing: ' + error.message, true); }
+    }
+    function install(data) {
+      examples = validate(data); const select = byId('example-select'); select.replaceChildren();
+      examples.forEach((row, i) => { const option = document.createElement('option'); option.value = String(i); option.textContent = row.title; select.appendChild(option); });
+      select.disabled = false; byId('manual-load').hidden = true;
+      show(0);
+    }
+    byId('example-select').addEventListener('change', (event) => show(Number(event.target.value)));
+    byId('previous').addEventListener('click', () => { if (currentIndex > 0) show(currentIndex - 1); });
+    byId('next').addEventListener('click', () => { if (currentIndex < examples.length - 1) show(currentIndex + 1); });
+    byId('manifest-file').addEventListener('change', async (event) => {
+      try { const file = event.target.files[0]; if (file) install(JSON.parse(await file.text())); }
+      catch (error) { announce('Cannot load examples: ' + error.message, true); }
+    });
+    (async () => {
+      try {
+        const inline = JSON.parse(byId('examples-data').textContent);
+        if (Array.isArray(inline) && inline.length) { install(inline); return; }
+        const response = await fetch('examples.json', {cache:'no-cache'});
+        if (!response.ok) throw new Error('examples.json returned HTTP ' + response.status);
+        install(await response.json());
+      } catch (error) {
+        announce('Examples are not loaded: ' + error.message, true);
+        byId('manual-load').hidden = false;
+      }
+    })();
+  </script>
+</body>
+</html>
