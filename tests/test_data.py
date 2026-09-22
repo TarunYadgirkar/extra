@@ -25,8 +25,11 @@ def _write_training_manifest(root: Path) -> Path:
     positive = np.zeros((8, 8), bool)
     positive[3:5, 3:5] = True
     known = np.ones((8, 8), bool)
+    blank = np.zeros((8, 8), bool)
+    blank[:2, 6:] = True
     _save_mask(root / "positive.png", positive)
     _save_mask(root / "known.png", known)
+    _save_mask(root / "blank.png", blank)
 
     manifest = {
         "schema": SCHEMA,
@@ -43,6 +46,7 @@ def _write_training_manifest(root: Path) -> Path:
                 "labels": {
                     "positive_mask": "positive.png",
                     "known_mask": "known.png",
+                    "blank_mask": "blank.png",
                 },
             }
         ],
