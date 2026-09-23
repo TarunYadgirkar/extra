@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -198,7 +199,7 @@ def test_fixture_bundle_checksums_and_passes_official_validator(
     assert manifest["timing"]["runtime_seconds"] == 12.5
     assert "loading" in manifest["timing"]["definition"]
     assert "file writing" in manifest["timing"]["definition"]
-    assert manifest["official_public_validation_document_macro_iou"] is None
+    assert manifest["official_public_validation_document_macro_iou"] == 0.25
 
     report = (output / "technical-report.md").read_text(encoding="utf-8")
     assert (
@@ -206,8 +207,12 @@ def test_fixture_bundle_checksums_and_passes_official_validator(
         "37-query suite. That figure is not the score of this bundle."
     ) in report
     assert "Measured document-macro IoU in the unedited metrics file: 0.25." in report
+    assert (
+        "Official public-validation document-macro IoU from the unedited "
+        "metrics file: 0.25."
+    ) in report
     assert "0.4779169321" not in report
-    assert "The neural ensemble has not been trained or scored here." in report
+    assert "The neural ensemble has not been trained or scored here." not in report
     assert (
         "The three visual examples are representative fixtures until real "
         "validation predictions exist."
@@ -225,6 +230,83 @@ def test_second_build_reproduces_prediction_archive_checksum(tmp_path: Path) -> 
     assert artifact_record(first / "predictions.tar") == artifact_record(
         second / "predictions.tar"
     )
+
+
+def test_two_flag_cli_builds_sealed_fixture_and_passes_official_validator(
+    tmp_path: Path,
+) -> None:
+    run = _sealed_run(tmp_path, document_macro_iou=0.41, command="final")
+    (run / "timing.json").write_text(
+        json.dumps(
+            {
+                "runtime_seconds": 9.5,
+                "time_spent_hours": 1.25,
+                "peak_memory_mb": 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "dist"
+    completed = _run_cli(run, output)
+    assert completed.returncode == 0, completed.stderr
+    assert "--repository" not in completed.args
+
+    submission = json.loads((output / "submission.json").read_text(encoding="utf-8"))
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    remote = subprocess.check_output(
+        ["git", "remote", "get-url", "origin"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    evaluator = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT / "challenge",
+        text=True,
+    ).strip()
+    release = json.loads(
+        (ROOT / "challenge" / "data" / "release.json").read_text(encoding="utf-8")
+    )
+    assert submission["repository"] == normalize_repository_url(remote)
+    assert "x-access-token" not in json.dumps(submission)
+    assert submission["commit"] == head
+    assert manifest["dataset"]["sha256"] == release["sha256"]
+    assert manifest["dataset"]["version"] == release["version"]
+    assert manifest["dataset"]["url"] == release["url"]
+    assert manifest["evaluator_revision"] == evaluator
+    assert platform.platform() in submission["hardware"]
+    assert submission["runtime_seconds"] == 9.5
+    assert submission["time_spent_hours"] == 1.25
+    assert submission["peak_memory_mb"] == 64
+    assert manifest["official_public_validation_document_macro_iou"] is None
+    report = (output / "technical-report.md").read_text(encoding="utf-8")
+    assert "The neural ensemble has not been trained or scored here." in report
+    assert "Measured document-macro IoU in the unedited metrics file: 0.41." in report
+    assert "not measurements" not in report
+    assert (output / "environment.lock").read_bytes() == (
+        ROOT / "pyproject.toml"
+    ).read_bytes()
+    _validate_official(output / "submission.json")
+
+
+def test_unmeasured_timing_is_null_and_not_a_measurement(tmp_path: Path) -> None:
+    run = _sealed_run(tmp_path, document_macro_iou=0.33, command="final")
+    output = tmp_path / "dist"
+    completed = _run_cli(run, output)
+    assert completed.returncode == 0, completed.stderr
+    submission = json.loads((output / "submission.json").read_text(encoding="utf-8"))
+    assert submission["runtime_seconds"] is None
+    assert submission["time_spent_hours"] is None
+    assert submission["peak_memory_mb"] is None
+    report = (output / "technical-report.md").read_text(encoding="utf-8")
+    assert "The recorded nulls are not measurements." in report
+    assert "The neural ensemble has not been trained or scored here." in report
+    assert "Measured document-macro IoU in the unedited metrics file: 0.33." in report
+    assert "0.4779169321" not in report
 
 
 def test_cli_refuses_unsealed_final_run(tmp_path: Path) -> None:
@@ -312,11 +394,29 @@ def _build(
     )
 
 
+def _run_cli(run: Path, output: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "build_submission.py"),
+            "--run",
+            str(run),
+            "--output",
+            str(output),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def _sealed_run(
     tmp_path: Path,
     *,
     document_macro_iou: float | None = None,
     metrics: dict[str, object] | None = None,
+    command: str = "baseline",
 ) -> Path:
     run = tmp_path / "run"
     run.mkdir()
@@ -339,7 +439,7 @@ def _sealed_run(
     )
     config = tmp_path / "config.yaml"
     config.write_text("mode: classical\n", encoding="utf-8")
-    experiments.seal_run(run, config, command="baseline")
+    experiments.seal_run(run, config, command=command)
     return run
 
 
