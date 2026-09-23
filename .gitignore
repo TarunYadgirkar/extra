@@ -11,3 +11,6 @@ metrics.json
 cache/
 scratch/
 validation-inputs.json
+solution/exp/*/logs/
+solution/exp/neural/weights/
+__pycache__/
