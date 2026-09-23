@@ -397,6 +397,7 @@ def test_mid_epoch_resume_matches_uninterrupted_weights_ema_and_scheduler(
 def test_resume_validation_rejects_every_training_identity_mismatch() -> None:
     config = {
         "seed": 11,
+        "folds": [0],
         "model": {"backbone": "tiny"},
         "data": {"tile_size": 32, "workers": 0},
         "training": {

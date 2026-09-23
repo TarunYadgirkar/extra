@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import io
 import os
 import tempfile
 from pathlib import Path
@@ -71,10 +72,11 @@ def load_verified_checkpoint(
     *,
     map_location: str | torch.device = "cpu",
 ) -> dict[str, Any]:
-    """Verify bytes before deserializing and return a checkpoint mapping.
+    """Check one byte snapshot before deserializing a local checkpoint.
 
-    ``expected_sha256`` can come from a trusted manifest. If it is omitted,
-    the adjacent ``.sha256`` sidecar is required.
+    The adjacent sidecar detects accidental corruption but is not an
+    authenticity mechanism. Callers requiring authenticity must supply a
+    digest obtained through a separately trusted channel.
     """
 
     checkpoint_path = Path(path)
@@ -85,13 +87,14 @@ def load_verified_checkpoint(
     )
     if len(expected) != 64 or any(character not in "0123456789abcdef" for character in expected):
         raise ValueError("expected SHA-256 must contain 64 hexadecimal characters")
-    actual = checkpoint_sha256(checkpoint_path)
+    checkpoint_bytes = checkpoint_path.read_bytes()
+    actual = hashlib.sha256(checkpoint_bytes).hexdigest()
     if not hmac.compare_digest(actual, expected):
         raise ValueError(
             f"checkpoint SHA-256 mismatch: expected {expected}, computed {actual}"
         )
     loaded = torch.load(
-        checkpoint_path,
+        io.BytesIO(checkpoint_bytes),
         map_location=map_location,
         weights_only=False,
     )
