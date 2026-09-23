@@ -61,12 +61,54 @@ def tone_maps(gray):
     return maps
 
 
+NBINS = 8
+
+
+def hist_maps(gray):
+    """Local orientation (doubled-angle) and intensity histograms on the DOWN grid."""
+    g = gray.astype(np.float32) / 255.0
+    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+    mag = np.sqrt(gx * gx + gy * gy)
+    ang = (np.arctan2(gy, gx) % np.pi) / np.pi * NBINS
+    b = np.minimum(ang.astype(np.int32), NBINS - 1)
+    h, w = gray.shape
+    sz = (w // DOWN, h // DOWN)
+    ori = np.stack([cv2.resize(mag * (b == i), sz, interpolation=cv2.INTER_AREA) for i in range(NBINS)], -1)
+    ib = np.minimum((g * NBINS).astype(np.int32), NBINS - 1)
+    inten = np.stack([cv2.resize((ib == i).astype(np.float32), sz, interpolation=cv2.INTER_AREA) for i in range(NBINS)], -1)
+    out = {}
+    for r in (4, 12):
+        k = 2 * r + 1
+        o = cv2.blur(ori, (k, k))
+        out[f"ori{r}"] = o
+        out[f"int{r}"] = cv2.blur(inten, (k, k))
+    return out
+
+
+def _hist_compare(local, q):
+    """cosine and L1 distance between local histograms (N,B) and query histogram (B,)."""
+    ln = local / (local.sum(1, keepdims=True) + 1e-6)
+    qn = q / (q.sum() + 1e-6)
+    cos = (local @ q) / (np.linalg.norm(local, axis=1) * np.linalg.norm(q) + 1e-6)
+    return cos, np.abs(ln - qn).sum(1), local.sum(1)
+
+
 class ImageContext:
     def __init__(self, gray, dino):
         """dino: list of (feature_grid, stride)."""
         self.shape = gray.shape
         self.tone = tone_maps(gray)
+        self.hist = hist_maps(gray)
         self.dino = [(_norm(f), s) for f, s in dino]
+        self.stats = []
+        for f, _ in self.dino:
+            flat = f.reshape(-1, f.shape[-1])
+            sub = flat[:: max(1, len(flat) // 60000)]
+            mu = sub.mean(0)
+            cov = np.cov(sub, rowvar=False)
+            cov += np.eye(len(mu)) * (0.1 * np.trace(cov) / len(mu))
+            self.stats.append((mu, np.linalg.inv(cov).astype(np.float32)))
 
 
 def query_features(ctx, box):
@@ -76,6 +118,8 @@ def query_features(ctx, box):
     sx1, sy1 = max(x1 // DOWN, sx0 + 1), max(y1 // DOWN, sy0 + 1)
     for k, m in ctx.tone.items():
         q[k] = float(np.median(m[sy0:sy1, sx0:sx1]))
+    for k, m in ctx.hist.items():
+        q["h_" + k] = m[sy0:sy1, sx0:sx1].reshape(-1, m.shape[-1]).mean(0)
     protos = []
     for f, s in ctx.dino:
         iy, ix = _cells(box, s, *f.shape[:2])
@@ -85,7 +129,12 @@ def query_features(ctx, box):
         # robust prototype: drop the least typical third of cells (text, stray lines)
         keep = self_sim >= np.quantile(self_sim, 0.34) if len(cells) >= 3 else np.ones(len(cells), bool)
         rob = cells[keep].mean(0); rob /= np.linalg.norm(rob) + 1e-6
-        protos.append({"mean": mean, "rob": rob, "cells": cells, "self_mean": float(self_sim.mean()),
+        mu, icov = ctx.stats[len(protos)]
+        wv = icov @ (cells.mean(0) - mu)
+        lo, hi = float(mu @ wv), float(cells.mean(0) @ wv)
+        wr = icov @ (cells[keep].mean(0) - mu)
+        lor, hir = float(mu @ wr), float(cells[keep].mean(0) @ wr)
+        protos.append({"lda": (wv, lo, hi), "ldar": (wr, lor, hir), "mean": mean, "rob": rob, "cells": cells, "self_mean": float(self_sim.mean()),
                        "self_min": float(self_sim.min()), "n": len(cells)})
     return q, protos
 
@@ -99,7 +148,10 @@ def sim_grids(ctx, protos):
         cs = flat @ p["cells"].T
         k = min(3, cs.shape[1])
         topk = np.sort(cs, axis=1)[:, -k:].mean(1).reshape(f.shape[:2])
-        out.append((s, {"sm": sm, "sr": sr, "tk": topk}))
+        wv, lo, hi = p["lda"]; wr, lor, hir = p["ldar"]
+        lda = ((flat @ wv - lo) / (hi - lo + 1e-6)).reshape(f.shape[:2])
+        ldar = ((flat @ wr - lor) / (hir - lor + 1e-6)).reshape(f.shape[:2])
+        out.append((s, {"sm": sm, "sr": sr, "tk": topk, "lda": lda, "ldar": ldar}))
     return out
 
 
@@ -117,6 +169,11 @@ def features_at(ctx, box, ys, xs, cache=None):
         v = sample_grid(m, DOWN, ys, xs)
         cols += [v, v - q[k], np.abs(v - q[k])]; names += [k, k + "_d", k + "_ad"]
         cols.append(np.full_like(v, q[k])); names.append("q_" + k)
+    for k, m in ctx.hist.items():
+        qh = q["h_" + k]
+        cos, l1, tot = _hist_compare(sample_grid(m, DOWN, ys, xs), qh)
+        cols += [cos, l1, tot - qh.sum(), np.full(len(ys), qh.sum())]
+        names += [k + "_cos", k + "_l1", k + "_totd", "q_" + k + "_tot"]
     for i, ((s, g), p, qt) in enumerate(zip(cache["sims"], protos, cache["quant"])):
         for k, grid in g.items():
             v = sample_grid(grid, s, ys, xs)

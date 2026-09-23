@@ -7,11 +7,15 @@ from devdata import examples, domain, ROOT
 from features import load_gray
 from pixfeat import ImageContext, features_at
 
-SCALES = [("feat_s_0.5", 28.0), ("feat_s_1.0", 14.0)]
+import os
+SCALES = [(f"feat_{os.environ.get('BB', 's')}_0.5", 28.0), (f"feat_{os.environ.get('BB', 's')}_1.0", 14.0)]
 PER_CLASS = 2500
 
 
-def run(split, tag):
+UNIFORM = 20000
+
+
+def run(split, tag, mode="balanced"):
     rng = np.random.default_rng(0)
     exs = examples(split)
     by_img = {}
@@ -26,7 +30,11 @@ def run(split, tag):
         for e in group:
             d = domain(e)
             idx = np.arange(len(d["ys"]))
-            if split == "train":
+            if mode == "uniform":
+                if e["kind"] != "real":
+                    continue
+                idx = rng.choice(idx, min(UNIFORM, len(idx)), replace=False)
+            elif split == "train":
                 pos, neg = idx[d["pos"]], idx[~d["pos"]]
                 idx = np.concatenate([rng.choice(pos, min(PER_CLASS, len(pos)), replace=False),
                                       rng.choice(neg, min(PER_CLASS, len(neg)), replace=False)])
@@ -34,8 +42,8 @@ def run(split, tag):
             X.append(f); Y.append(d["pos"][idx]); Q.append(np.full(len(idx), exs.index(e)))
         if n % 20 == 0:
             print(split, n, len(by_img), f"{time.time()-t:.0f}s", flush=True)
-    np.savez(ROOT / "cache" / f"rows_{split}_{tag}.npz", X=np.concatenate(X), Y=np.concatenate(Y), Q=np.concatenate(Q), names=np.array(names))
+    np.savez(ROOT / "cache" / f"rows_{split}{'_u' if mode == 'uniform' else ''}_{tag}.npz", X=np.concatenate(X), Y=np.concatenate(Y), Q=np.concatenate(Q), names=np.array(names))
 
 
 if __name__ == "__main__":
-    run(sys.argv[1], sys.argv[2])
+    run(sys.argv[1], sys.argv[2], *sys.argv[3:])
