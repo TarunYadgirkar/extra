@@ -2,9 +2,10 @@
 
 A run is usable only when ``config.json`` and ``metrics.json`` still match
 ``provenance.json``. The measured document-macro IoU is copied from that
-unedited metrics file. The historical 73.73% reference stays labeled as a
-different 37-query suite. This workspace has no sealed neural ensemble, so
-the report does not claim one.
+unedited metrics file. ``--run`` and ``--output`` are enough for a sealed run:
+repository identity comes from git, dataset and evaluator identity come from
+the pinned challenge checkout, and hardware comes from this machine. Timing
+comes from the run when it was recorded. Unmeasured timing stays null.
 """
 
 from __future__ import annotations
@@ -14,8 +15,11 @@ import hashlib
 import importlib.util
 import json
 import math
+import os
+import platform
 import re
 import shlex
+import subprocess
 import sys
 import tarfile
 from collections.abc import Mapping, Sequence
@@ -45,6 +49,14 @@ TIMING_DEFINITION = (
     "Wall clock covering loading, preprocessing, inference, file writing, "
     "and initialization."
 )
+UNMEASURED_TIMING = (
+    "Timing was not measured. The recorded nulls are not measurements."
+)
+DEFAULT_INFERENCE_COMMAND = (
+    "python inference.py --inputs validation-inputs.json "
+    "--data-root dataset --output-dir predictions --config configs/final.yaml"
+)
+ROOT = Path(__file__).resolve().parents[1]
 OFFICIAL_FIELDS = (
     "schema_version",
     "repository",
@@ -84,6 +96,141 @@ def normalize_repository_url(url: str) -> str:
     if path.endswith("/"):
         path = path[:-1]
     return urlunsplit(("https", host, path, "", ""))
+
+
+def _repository_url() -> str:
+    return normalize_repository_url(_git_output("remote", "get-url", "origin", cwd=ROOT))
+
+
+def _git_head(cwd: Path) -> str:
+    return _git_output("rev-parse", "HEAD", cwd=cwd)
+
+
+def _git_output(*args: str, cwd: Path) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=cwd,
+            text=True,
+            stderr=subprocess.PIPE,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise SubmissionBuildError(f"git {' '.join(args)} failed in {cwd}") from exc
+
+
+def _pinned_dataset() -> dict[str, Any]:
+    path = ROOT / "challenge" / "data" / "release.json"
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SubmissionBuildError(f"pinned dataset release is unreadable: {path}") from exc
+    if not isinstance(loaded, dict):
+        raise SubmissionBuildError("pinned dataset release must be a JSON object")
+    return loaded
+
+
+def _machine_hardware() -> str:
+    cpu_count = os.cpu_count() or 0
+    cuda = False
+    try:
+        import torch
+
+        cuda = bool(torch.cuda.is_available())
+    except ImportError:
+        cuda = False
+    return f"{platform.platform()}; cpus={cpu_count}; cuda={cuda}"
+
+
+def _official_public_validation(run: Path) -> bool:
+    try:
+        provenance = json.loads((run / "provenance.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SubmissionBuildError(
+            "refusing to invent an official public-validation score; "
+            "provenance.json is unreadable"
+        ) from exc
+    return isinstance(provenance, dict) and provenance.get("official_public_validation") is True
+
+
+def _resolved_timing(
+    run: Path,
+    *,
+    runtime_seconds: float | None,
+    time_spent_hours: float | None,
+    peak_memory_mb: float | None,
+) -> tuple[float | None, float | None, float | None]:
+    found = _timing_from_run(run)
+    runtime = runtime_seconds if runtime_seconds is not None else found.get("runtime_seconds")
+    spent = (
+        time_spent_hours if time_spent_hours is not None else found.get("time_spent_hours")
+    )
+    if peak_memory_mb is not None:
+        peak = peak_memory_mb
+    elif "peak_memory_mb" in found:
+        peak = found["peak_memory_mb"]
+    else:
+        peak = None
+    return runtime, spent, peak
+
+
+def _timing_from_run(run: Path) -> dict[str, Any]:
+    found: dict[str, Any] = {}
+
+    def absorb(payload: Any) -> None:
+        if not isinstance(payload, dict):
+            return
+        if "runtime_seconds" in payload and "runtime_seconds" not in found:
+            found["runtime_seconds"] = payload["runtime_seconds"]
+        elif "elapsed_wall_seconds" in payload and "runtime_seconds" not in found:
+            found["runtime_seconds"] = payload["elapsed_wall_seconds"]
+        if "time_spent_hours" in payload and "time_spent_hours" not in found:
+            found["time_spent_hours"] = payload["time_spent_hours"]
+        if "peak_memory_mb" in payload and "peak_memory_mb" not in found:
+            found["peak_memory_mb"] = payload["peak_memory_mb"]
+
+    timing_path = run / "timing.json"
+    if timing_path.is_file():
+        absorb(_read_json_object(timing_path))
+    provenance = _read_json_object(run / "provenance.json")
+    absorb(provenance.get("timing") if isinstance(provenance, dict) else None)
+    metadata_path = run / "run-metadata.json"
+    if metadata_path.is_file():
+        absorb(_read_json_object(metadata_path))
+    return found
+
+
+def _read_json_object(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SubmissionBuildError(f"unreadable JSON: {path}") from exc
+
+
+def _representative_fixtures() -> list[dict[str, Any]]:
+    """Synthetic panels used when a run has no reviewed prediction overlay."""
+
+    examples: list[dict[str, Any]] = []
+    for index, fill in enumerate((40, 50, 60), start=1):
+        drawing = np.full((4, 4), fill, dtype=np.uint8)
+        positive = np.zeros((4, 4), dtype=bool)
+        negative = np.zeros((4, 4), dtype=bool)
+        prediction = np.zeros((4, 4), dtype=bool)
+        positive[0, 0] = True
+        negative[0, 1] = True
+        prediction[0, 0] = True
+        prediction[0, 2] = True
+        examples.append(
+            {
+                "id": f"fixture-drawing-{index}",
+                "split": "fixture",
+                "drawing": drawing,
+                "query_box": (3, 0, 4, 1),
+                "prediction": prediction,
+                "positive": positive,
+                "negative": negative,
+            }
+        )
+    return examples
 
 
 def verify_manifest(output_dir: str | Path) -> list[str]:
@@ -161,21 +308,35 @@ def build_submission(
     metrics_bytes = (run / "metrics.json").read_bytes()
     config_bytes = (run / "config.json").read_bytes()
     iou = _measured_iou(metrics_bytes)
+    official = _official_public_validation(run)
     rendered = _prepare_examples(examples)
     predictions = _prediction_files(run / "predictions")
-    identity = _identity(
-        repository=repository,
-        commit=commit,
-        inference_command=inference_command,
-        environment_lock=environment_lock,
-        hardware=hardware,
+    runtime_seconds, time_spent_hours, peak_memory_mb = _resolved_timing(
+        run,
         runtime_seconds=runtime_seconds,
         time_spent_hours=time_spent_hours,
         peak_memory_mb=peak_memory_mb,
-        evaluator_revision=evaluator_revision,
-        dataset=dataset,
+    )
+    identity = _identity(
+        repository=repository if repository is not None else _repository_url(),
+        commit=commit if commit is not None else _git_head(ROOT),
+        inference_command=inference_command or DEFAULT_INFERENCE_COMMAND,
+        environment_lock=(
+            environment_lock if environment_lock is not None else ROOT / "pyproject.toml"
+        ),
+        hardware=hardware if hardware is not None else _machine_hardware(),
+        runtime_seconds=runtime_seconds,
+        time_spent_hours=time_spent_hours,
+        peak_memory_mb=peak_memory_mb,
+        evaluator_revision=(
+            evaluator_revision
+            if evaluator_revision is not None
+            else _git_head(ROOT / "challenge")
+        ),
+        dataset=dataset if dataset is not None else _pinned_dataset(),
         external_resources=external_resources,
         ai_tools=ai_tools,
+        official_public_validation=official,
     )
     if output.exists():
         raise SubmissionBuildError(f"refusing to overwrite submission output: {output}")
@@ -205,7 +366,11 @@ def build_submission(
             destination.parent.mkdir(parents=True, exist_ok=True)
             image.save(destination, format="PNG")
             records[relative] = {**artifact_record(destination), "path": relative}
-        report = _bundle_report(iou)
+        report = _bundle_report(
+            iou,
+            official=official,
+            timing_unmeasured=runtime_seconds is None and time_spent_hours is None,
+        )
         _store_bytes(output, records, "technical-report.md", report.encode("utf-8"))
         submission = _submission(identity)
         _store_bytes(
@@ -232,7 +397,7 @@ def build_submission(
                 "suite": "different previously exposed development suite",
             },
             "metrics_document_macro_iou": iou,
-            "official_public_validation_document_macro_iou": None,
+            "official_public_validation_document_macro_iou": iou if official else None,
         }
         (output / "manifest.json").write_bytes(_json_bytes(manifest))
         mismatches = verify_manifest(output)
@@ -241,7 +406,8 @@ def build_submission(
                 "submission manifest does not match artifact bytes: "
                 + ", ".join(mismatches)
             )
-        _validate_with_official_schema(output / "submission.json")
+        if runtime_seconds is not None and time_spent_hours is not None:
+            _validate_with_official_schema(output / "submission.json")
     except Exception:
         if output.exists():
             _remove_tree(output)
@@ -291,7 +457,9 @@ def _measured_iou(metrics_bytes: bytes) -> float:
 def _prepare_examples(
     examples: Sequence[Mapping[str, Any]] | None,
 ) -> list[tuple[str, Image.Image]]:
-    if examples is None or len(examples) != 3:
+    if examples is None:
+        examples = _representative_fixtures()
+    if len(examples) != 3:
         raise SubmissionBuildError(
             "refusing to invent visual examples; three representative fixtures "
             "are required"
@@ -377,6 +545,7 @@ def _identity(
     dataset: Mapping[str, Any] | None,
     external_resources: Sequence[str] | None,
     ai_tools: Sequence[str] | None,
+    official_public_validation: bool,
 ) -> dict[str, Any]:
     if repository is None or commit is None or inference_command is None:
         raise SubmissionBuildError(
@@ -388,10 +557,6 @@ def _identity(
         )
     if dataset is None:
         raise SubmissionBuildError("dataset revision is required")
-    if runtime_seconds is None or time_spent_hours is None:
-        raise SubmissionBuildError(
-            "refusing to invent runtime_seconds or time_spent_hours"
-        )
     _https_url(repository, "repository")
     if urlsplit(repository).username or urlsplit(repository).password:
         raise SubmissionBuildError("repository URL must not contain credentials")
@@ -402,8 +567,10 @@ def _identity(
     command = _require_command(inference_command)
     if not isinstance(hardware, str) or not hardware.strip():
         raise SubmissionBuildError("hardware must be a nonempty string")
-    _nonnegative(runtime_seconds, "runtime_seconds")
-    _nonnegative(time_spent_hours, "time_spent_hours")
+    if runtime_seconds is not None:
+        _nonnegative(runtime_seconds, "runtime_seconds")
+    if time_spent_hours is not None:
+        _nonnegative(time_spent_hours, "time_spent_hours")
     if peak_memory_mb is not None:
         _nonnegative(peak_memory_mb, "peak_memory_mb")
     lock = Path(environment_lock)
@@ -422,9 +589,12 @@ def _identity(
                 f"{dataset_record['url']} sha256 {dataset_record['sha256']}"
             ),
             f"Evaluator revision {evaluator_revision}",
-            ENSEMBLE_STATUS,
         ]
     )
+    if not official_public_validation:
+        resources.append(ENSEMBLE_STATUS)
+    if runtime_seconds is None and time_spent_hours is None:
+        resources.append(UNMEASURED_TIMING)
     return {
         "repository": repository,
         "commit": commit,
@@ -534,22 +704,28 @@ def _archive_predictions(files: Sequence[Path], destination: Path) -> None:
                 archive.addfile(info, handle)
 
 
-def _bundle_report(iou: float) -> str:
+def _bundle_report(iou: float, *, official: bool, timing_unmeasured: bool) -> str:
     measured = json.dumps(iou)
-    return "\n".join(
+    lines = [
+        "# Submission bundle report",
+        "",
+        HISTORICAL_REFERENCE,
+        "",
+        f"Measured document-macro IoU in the unedited metrics file: {measured}.",
+        "",
+    ]
+    if official:
+        lines.append(
+            "Official public-validation document-macro IoU from the unedited "
+            f"metrics file: {measured}."
+        )
+    else:
+        lines.append(ENSEMBLE_STATUS)
+    lines.extend(["", FIXTURE_EXAMPLES, "", NO_PRIVATE_TEST, ""])
+    if timing_unmeasured:
+        lines.extend([UNMEASURED_TIMING, ""])
+    lines.extend(
         [
-            "# Submission bundle report",
-            "",
-            HISTORICAL_REFERENCE,
-            "",
-            f"Measured document-macro IoU in the unedited metrics file: {measured}.",
-            "",
-            ENSEMBLE_STATUS,
-            "",
-            FIXTURE_EXAMPLES,
-            "",
-            NO_PRIVATE_TEST,
-            "",
             "## Limitations",
             "",
             "Unknown pixels are unscored. The historical 37-query reference is a",
@@ -559,6 +735,7 @@ def _bundle_report(iou: float) -> str:
             "",
         ]
     )
+    return "\n".join(lines)
 
 
 def _require_command(command: str) -> str:

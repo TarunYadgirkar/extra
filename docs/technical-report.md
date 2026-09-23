@@ -83,10 +83,15 @@ predictions and are not a measured score.
 No GPU was available. The capped-1600 metrics file does not record processor
 model, wall-clock time, or peak memory. Timing coverage for a future sealed
 bundle is wall clock including loading, preprocessing, inference, file
-writing, and initialization. `submission.example.json` uses `runtime_seconds`
-0 and `time_spent_hours` 0 because those durations were not recorded. The
-zeros are schema fillers, not measurements. `peak_memory_mb` is null because
-peak memory was not measured.
+writing, and initialization. When a sealed run has no timing record,
+`scripts/build_submission.py` writes null `runtime_seconds`,
+`time_spent_hours`, and `peak_memory_mb`. Timing was not measured. The
+recorded nulls are not measurements. The official validator accepts null
+peak memory and rejects null `runtime_seconds` and `time_spent_hours`, so an
+untimed bundle is not a validator-clean submission.
+`submission.example.json` still uses 0 for those two fields so the example
+file itself passes the validator. Those zeros are schema fillers, not
+measurements.
 
 ## Data use
 
