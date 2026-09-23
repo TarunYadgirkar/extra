@@ -8,3 +8,6 @@ metrics.json
 .private/
 .env
 .DS_Store
+cache/
+scratch/
+validation-inputs.json
