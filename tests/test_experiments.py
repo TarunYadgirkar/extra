@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 import scripts.run_experiments as experiments
 
@@ -668,3 +669,37 @@ def test_predict_oof_execute_fails_closed_without_checkpoints(
     assert "missing" in completed.stderr.lower()
     assert "checkpoint" in completed.stderr.lower()
     assert list(tmp_path.rglob("metrics.json")) == []
+
+
+def test_shipped_final_config_run_dir_resolves_and_missing_checkpoints_write_nothing() -> None:
+    config_path = ROOT / "configs" / "final.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert config["run_dir"] == "../runs/final"
+    resolved = (config_path.parent / config["run_dir"]).resolve()
+    assert resolved == (ROOT / "runs" / "final").resolve()
+    metrics = resolved / "metrics.json"
+    existed = resolved.exists()
+    assert not metrics.exists()
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_experiments.py",
+            "final",
+            "--config",
+            "configs/final.yaml",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "missing" in completed.stderr.lower()
+    assert "checkpoint" in completed.stderr.lower()
+    assert "document_macro_iou" not in completed.stdout
+    assert "document_macro_iou" not in completed.stderr
+    assert not metrics.exists()
+    if not existed:
+        assert not resolved.exists()
