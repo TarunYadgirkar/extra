@@ -23,12 +23,8 @@ from PIL import Image
 from hatchmatch.baseline import baseline_probability
 from hatchmatch.calibrate import FusionCalibrator, FusionChannels, postprocess
 from hatchmatch.checkpoints import checkpoint_sha256
-from hatchmatch.contracts import Box, Request, load_requests
-from hatchmatch.features import (
-    _enhanced_ink,
-    _foreground_mask,
-    _iter_texture_channels,
-)
+from hatchmatch.contracts import Request, load_requests
+from hatchmatch.features import foreground, local_variance, query_compatibility
 from hatchmatch.output import write_binary_png
 from hatchmatch.predict import predict_probability
 
@@ -80,30 +76,37 @@ def run_inference(
     calibrator, parameters = _load_calibration(config, base)
     requests = load_requests(inputs, data_root)
     destination = Path(output_dir)
-    for request in requests:
-        mask = _request_mask(
-            request,
-            models,
-            config,
-            selected_device,
-            calibrator,
-            parameters,
-        )
-        write_binary_png(
-            mask,
-            destination / f"{request.id}.png",
-            (request.width, request.height),
-        )
-    metadata = {
-        "elapsed_wall_seconds": time.perf_counter() - started,
-        "count": len(requests),
-        "hardware": _hardware(selected_device),
-        "package_versions": _package_versions(),
-        "git_sha": _git_sha(),
-        "config_sha256": config_hash,
-        "checkpoint_hashes": checkpoint_hashes,
-    }
-    _write_json(destination / "run-metadata.json", metadata)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=f".{destination.name}.",
+        dir=destination.parent,
+    ) as staging_name:
+        staging = Path(staging_name)
+        for request in requests:
+            mask = _request_mask(
+                request,
+                models,
+                config,
+                selected_device,
+                calibrator,
+                parameters,
+            )
+            write_binary_png(
+                mask,
+                staging / f"{request.id}.png",
+                (request.width, request.height),
+            )
+        metadata = {
+            "elapsed_wall_seconds": time.perf_counter() - started,
+            "count": len(requests),
+            "hardware": _hardware(selected_device),
+            "package_versions": _package_versions(),
+            "git_sha": _git_sha(),
+            "config_sha256": config_hash,
+            "checkpoint_hashes": checkpoint_hashes,
+        }
+        _write_json(staging / "run-metadata.json", metadata)
+        _publish(staging, destination)
     return metadata
 
 
@@ -286,7 +289,9 @@ def _request_mask(
     if calibrator is not None:
         if parameters is None:
             raise ValueError("calibration parameters are required")
-        foreground, local_variance = _evidence(gray)
+        foreground_map = foreground(gray)
+        variance_map = local_variance(gray)
+        compatibility = query_compatibility(gray, request.query_box)
         probability = calibrator.predict(
             [
                 FusionChannels(
@@ -296,9 +301,9 @@ def _request_mask(
                         else np.zeros_like(classical)
                     ),
                     classical=classical,
-                    foreground=foreground,
-                    local_variance=local_variance,
-                    query_compatibility=classical,
+                    foreground=foreground_map,
+                    local_variance=variance_map,
+                    query_compatibility=compatibility,
                     document_id=request.id,
                     example_id=request.id,
                     source_fold=-1,
@@ -307,7 +312,7 @@ def _request_mask(
                 )
             ]
         )[0]
-        return postprocess(probability, foreground, parameters)
+        return postprocess(probability, foreground_map, parameters)
     if neural is not None:
         return neural >= _threshold(config)
     return classical >= _threshold(config)
@@ -342,17 +347,10 @@ def _load_gray(request: Request) -> np.ndarray:
     return gray
 
 
-def _evidence(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    foreground = _foreground_mask(_enhanced_ink(gray))
-    full_box = Box(0, 0, int(gray.shape[1]), int(gray.shape[0]))
-    local_variance = None
-    for index, channel in enumerate(_iter_texture_channels(gray, full_box)):
-        if index == 2:
-            local_variance = channel
-            break
-    if local_variance is None:
-        raise RuntimeError("local variance channel was not produced")
-    return foreground, local_variance
+def _publish(staging: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for path in sorted(staging.iterdir()):
+        os.replace(path, destination / path.name)
 
 
 def _threshold(config: Mapping[str, Any]) -> float:

@@ -149,6 +149,73 @@ def _iter_texture_channels(
                 yield _gabor_energy(ink, theta, wavelength, scale)
 
 
+def foreground(gray: np.ndarray) -> np.ndarray:
+    """Return the native foreground mask in ``[0, 1]``."""
+
+    _validate_gray(gray)
+    return _foreground_mask(_enhanced_ink(gray))
+
+
+def local_variance(gray: np.ndarray) -> np.ndarray:
+    """Return radius-2 local ink variance in ``[0, 1]``."""
+
+    _validate_gray(gray)
+    ink = _enhanced_ink(gray)
+    radius = 2
+    size = 2 * radius + 1
+    mean = cv2.boxFilter(
+        ink,
+        cv2.CV_32F,
+        (size, size),
+        normalize=True,
+        borderType=cv2.BORDER_REFLECT,
+    )
+    mean_square = cv2.boxFilter(
+        ink * ink,
+        cv2.CV_32F,
+        (size, size),
+        normalize=True,
+        borderType=cv2.BORDER_REFLECT,
+    )
+    variance = np.maximum(mean_square - mean * mean, 0.0)
+    return _unit_channel(variance * np.float32(4.0))
+
+
+def query_compatibility(gray: np.ndarray, query_box: Box) -> np.ndarray:
+    """Return single-scale orientation agreement with the query, in ``[0, 1]``.
+
+    The score is cosine similarity of Gabor energies. It is not the robust
+    multi-channel distance produced by the classical baseline.
+    """
+
+    _validate_inputs(gray, query_box)
+    ink = _enhanced_ink(gray)
+    energies = [
+        _gabor_energy(ink, float(theta), 6.0, 1.0) for theta in ORIENTATIONS
+    ]
+    stack = np.stack(energies, axis=-1)
+    query = stack[query_box.y0 : query_box.y1, query_box.x0 : query_box.x1]
+    prototype = np.mean(query.reshape(-1, stack.shape[-1]), axis=0)
+    prototype_scale = max(float(np.linalg.norm(prototype)), 1e-6)
+    prototype = prototype / np.float32(prototype_scale)
+    flat = stack.reshape(-1, stack.shape[-1])
+    pixel_norm = np.maximum(np.linalg.norm(flat, axis=1), 1e-6)
+    cosine = (flat @ prototype) / pixel_norm
+    agreement = (cosine.astype(np.float32) + np.float32(1.0)) * np.float32(0.5)
+    return _unit_channel(agreement.reshape(gray.shape))
+
+
+def _validate_gray(gray: np.ndarray) -> None:
+    if not isinstance(gray, np.ndarray):
+        raise ValueError("gray must be a NumPy array")
+    if gray.ndim != 2:
+        raise ValueError("gray must be two-dimensional")
+    if gray.dtype != np.uint8:
+        raise ValueError("gray must have uint8 dtype")
+    if gray.shape[0] == 0 or gray.shape[1] == 0:
+        raise ValueError("gray must not be empty")
+
+
 def texture_channels(gray: np.ndarray, query_box: Box) -> np.ndarray:
     """Return ``(height, width, channels)`` texture features in ``[0, 1]``."""
 
