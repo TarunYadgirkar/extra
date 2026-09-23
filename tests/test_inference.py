@@ -6,11 +6,14 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 import yaml
 from PIL import Image
 
+import inference
 from hatchmatch.baseline import baseline_probability
+from hatchmatch.calibrate import CHANNEL_NAMES
 from hatchmatch.checkpoints import checkpoint_sha256, save_checkpoint
 from hatchmatch.contracts import Box
 from hatchmatch.model import QuerySegFormer
@@ -476,6 +479,175 @@ def test_inference_source_does_not_reference_label_loaders() -> None:
         "train.json",
     ):
         assert token not in source
+
+
+def _two_orientation_drawing() -> np.ndarray:
+    gray = np.full((32, 48), 255, np.uint8)
+    gray[4:28:4, 4:22] = 0
+    gray[4:28, 28:46:4] = 0
+    return gray
+
+
+def _classical_calibration(path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "hatchmatch-calibration/v1",
+                "fusion": {
+                    "features": list(CHANNEL_NAMES),
+                    "coefficients": [0.0, 0.0, 0.0, 0.0, 0.0],
+                    "intercept": -20.0,
+                },
+                "parameters": {
+                    "threshold": 0.5,
+                    "min_component": 1,
+                    "close_radius": 0,
+                    "foreground_floor": 0.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_fusion_channels_use_distinct_public_feature_maps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gray = _two_orientation_drawing()
+    Image.fromarray(gray).save(tmp_path / "drawing.png")
+    query_box = Box(4, 4, 22, 28)
+    calibration_path = tmp_path / "calibration.json"
+    _classical_calibration(calibration_path)
+    config_path = tmp_path / "calibrated.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "schema": "hatchmatch-inference/v1",
+                "mode": "classical",
+                "threshold": 0.5,
+                "calibration": str(calibration_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    inputs = tmp_path / "inputs.json"
+    inputs.write_text(
+        json.dumps(
+            _official_manifest(
+                {
+                    "id": "q1",
+                    "image": "drawing.png",
+                    "width": 48,
+                    "height": 32,
+                    "query_box": [4, 4, 22, 28],
+                    "context_boxes": [],
+                }
+            )
+        ),
+        encoding="utf-8",
+    )
+    captured: list[object] = []
+    original_predict = inference.FusionCalibrator.predict
+
+    def spy(self: object, channels: list[object]) -> list[np.ndarray]:
+        captured.extend(channels)
+        return original_predict(self, channels)
+
+    monkeypatch.setattr(inference.FusionCalibrator, "predict", spy)
+    inference.run_inference(
+        inputs,
+        tmp_path,
+        tmp_path / "predictions",
+        config_path=config_path,
+        device="cpu",
+    )
+
+    assert len(captured) == 1
+    fusion = captured[0]
+    planes = {name: np.asarray(getattr(fusion, name)) for name in CHANNEL_NAMES}
+    assert [plane.shape for plane in planes.values()] == [gray.shape] * len(CHANNEL_NAMES)
+    assert len({id(plane) for plane in planes.values()}) == len(CHANNEL_NAMES)
+    assert not np.array_equal(planes["query_compatibility"], planes["classical"])
+    np.testing.assert_array_equal(
+        planes["classical"], baseline_probability(gray, query_box)
+    )
+
+    import hatchmatch.features as features
+
+    foreground = getattr(features, "foreground", None)
+    local_variance = getattr(features, "local_variance", None)
+    query_compatibility = getattr(features, "query_compatibility", None)
+    assert callable(foreground)
+    assert callable(local_variance)
+    assert callable(query_compatibility)
+    np.testing.assert_array_equal(planes["foreground"], foreground(gray))
+    np.testing.assert_array_equal(planes["local_variance"], local_variance(gray))
+    np.testing.assert_array_equal(
+        planes["query_compatibility"], query_compatibility(gray, query_box)
+    )
+    source = (ROOT / "inference.py").read_text(encoding="utf-8")
+    assert "_iter_texture_channels" not in source
+    for name in ("foreground", "local_variance", "query_compatibility"):
+        assert f"{name}(" in source
+
+
+def test_later_request_failure_publishes_no_earlier_mask(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("q1.png", "q2.png"):
+        Image.fromarray(np.full((16, 20), 255, np.uint8)).save(tmp_path / name)
+    inputs = tmp_path / "inputs.json"
+    inputs.write_text(
+        json.dumps(
+            {
+                "schema": INPUT_SCHEMA,
+                "examples": [
+                    {
+                        "id": "q1",
+                        "image": "q1.png",
+                        "width": 20,
+                        "height": 16,
+                        "query_box": [1, 1, 8, 8],
+                        "context_boxes": [],
+                    },
+                    {
+                        "id": "q2",
+                        "image": "q2.png",
+                        "width": 20,
+                        "height": 16,
+                        "query_box": [1, 1, 8, 8],
+                        "context_boxes": [],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = {"count": 0}
+    original = inference.baseline_probability
+
+    def fail_second_mask(gray: np.ndarray, query_box: Box) -> np.ndarray:
+        calls["count"] += 1
+        if calls["count"] >= 2:
+            raise RuntimeError("second mask failed")
+        return original(gray, query_box)
+
+    monkeypatch.setattr(inference, "baseline_probability", fail_second_mask)
+    output = tmp_path / "predictions"
+
+    with pytest.raises(RuntimeError, match="second mask failed"):
+        inference.run_inference(
+            inputs,
+            tmp_path,
+            output,
+            config_path=ROOT / "configs" / "test.yaml",
+            device="cpu",
+        )
+
+    assert calls["count"] == 2
+    assert not (output / "q1.png").exists()
+    assert not (output / "q2.png").exists()
+    assert not (output / "run-metadata.json").exists()
 
 
 def test_inference_cli_rejects_unknown_arguments(tmp_path: Path) -> None:
