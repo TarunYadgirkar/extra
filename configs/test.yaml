@@ -1,0 +1,3 @@
+schema: hatchmatch-inference/v1
+mode: classical
+threshold: 0.5

@@ -1,0 +1,34 @@
+schema: hatchmatch-inference/v1
+mode: ensemble
+model:
+  backbone: nvidia/mit-b2
+  pretrained: true
+  revision: 3bb39e8739149c3777d0325349b2a6c32c6413db
+  decoder_channels: 128
+tile_size: 256
+overlap: 64
+query_size: 96
+batch_size: 4
+tta:
+  - identity
+  - horizontal
+  - vertical
+  - rot90
+calibration: ../runs/calibration/best.json
+run_dir: ../runs/final
+checkpoints:
+  - path: ../runs/train-b2/fold-0/seed-20260922/best.pt
+  - path: ../runs/train-b2/fold-0/seed-20260923/best.pt
+  - path: ../runs/train-b2/fold-0/seed-20260924/best.pt
+  - path: ../runs/train-b2/fold-1/seed-20260922/best.pt
+  - path: ../runs/train-b2/fold-1/seed-20260923/best.pt
+  - path: ../runs/train-b2/fold-1/seed-20260924/best.pt
+  - path: ../runs/train-b2/fold-2/seed-20260922/best.pt
+  - path: ../runs/train-b2/fold-2/seed-20260923/best.pt
+  - path: ../runs/train-b2/fold-2/seed-20260924/best.pt
+  - path: ../runs/train-b2/fold-3/seed-20260922/best.pt
+  - path: ../runs/train-b2/fold-3/seed-20260923/best.pt
+  - path: ../runs/train-b2/fold-3/seed-20260924/best.pt
+  - path: ../runs/train-b2/fold-4/seed-20260922/best.pt
+  - path: ../runs/train-b2/fold-4/seed-20260923/best.pt
+  - path: ../runs/train-b2/fold-4/seed-20260924/best.pt

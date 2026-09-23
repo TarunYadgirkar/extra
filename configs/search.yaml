@@ -1,0 +1,23 @@
+schema: hatchmatch-calibration-search/v1
+seed: 20260923
+recall_floor: 0.95
+n_trials: 40
+max_pixels_per_document: 4096
+output_dir: ../runs/calibration
+oof_manifest: ../runs/oof/manifest.json
+fold_manifest: ../runs/folds.json
+training_manifest: ../dataset/train.json
+data_root: ../dataset
+parameters:
+  threshold:
+    low: 0.05
+    high: 0.95
+  min_component:
+    low: 1
+    high: 64
+  close_radius:
+    low: 0
+    high: 3
+  foreground_floor:
+    low: 0.0
+    high: 0.5
