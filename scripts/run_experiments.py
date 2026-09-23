@@ -659,6 +659,10 @@ def run_predict_oof(config_path: str | Path, *, execute: bool = False) -> int:
         return 2
     examples = manifest.get("examples") if isinstance(manifest, dict) else None
     if not isinstance(examples, list) or len(examples) == 0:
+        for name in ("manifest.json", "metrics.json", "provenance.json"):
+            artifact = output / name
+            if artifact.is_file():
+                artifact.unlink()
         print(
             "error: refusing to seal an empty out-of-fold example list; "
             "held-out probability maps were not written",

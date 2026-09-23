@@ -657,6 +657,7 @@ def test_predict_oof_execute_does_not_seal_an_empty_example_list(
 
     output = tmp_path / "oof-out"
     assert code != 0
+    assert not (output / "manifest.json").exists()
     assert not (output / "metrics.json").exists()
     assert not (output / "provenance.json").exists()
 
