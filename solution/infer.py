@@ -5,6 +5,7 @@ import cv2
 import joblib
 import numpy as np
 from PIL import Image
+from scipy import ndimage
 sys.path.insert(0, str(Path(__file__).parent))
 from features import load_model, load_gray, dense_features
 from pixfeat import DOWN, ImageContext, features_at
@@ -31,7 +32,13 @@ def predict_mask(head, ctx, tctx, box, threshold, chunk=400_000):
         if keep is None:
             keep = [j for j, n in enumerate(names) if n.startswith(TEX_GROUPS)]
         prob[i:i + chunk] = head.predict_proba(np.concatenate([f, t[:, keep]], 1))[:, 1]
-    full = cv2.resize(prob.reshape(gh, gw), (gw * DOWN, gh * DOWN), interpolation=cv2.INTER_LINEAR)[:h, :w]
+    # labels cover whole regions: smooth, then claim enclosed holes (text, symbols) inside accepted regions
+    g = cv2.GaussianBlur(prob.reshape(gh, gw), (0, 0), 14 / DOWN)
+    lab, n = ndimage.label(g <= threshold)
+    fill = np.ones(n + 1, bool); fill[0] = False
+    fill[np.unique(np.r_[lab[0], lab[-1], lab[:, 0], lab[:, -1]])] = False
+    g = np.where(fill[lab], threshold + 0.01, g)
+    full = cv2.resize(g, (gw * DOWN, gh * DOWN), interpolation=cv2.INTER_LINEAR)[:h, :w]
     return full > threshold
 
 
@@ -66,7 +73,7 @@ def main():
                 raise SystemExit(f"{r['id']}: image size mismatch")
             mask = predict_mask(head, ctx, tctx, r["query_box"], a.threshold)
             tmp = out / f".{r['id']}.png"
-            Image.fromarray(mask.astype(np.uint8) * 255, mode="L").save(tmp)
+            Image.fromarray(mask.astype(np.uint8) * 255).save(tmp)
             tmp.rename(out / f"{r['id']}.png")
             done += 1
             print(f"{done}/{len(rows)} {r['id']} {time.time()-t0:.0f}s", flush=True)
