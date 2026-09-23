@@ -354,7 +354,8 @@ def _run_shape_group(
     while start < len(indices):
         size = min(current, len(indices) - start)
         batch_ids = indices[start : start + size]
-        image = texture = batched_query = None
+        image = texture = batched_query = logits = None
+        retry_smaller = False
         try:
             image = torch.stack([_image_tensor(crops[index]) for index in batch_ids]).to(
                 device
@@ -370,10 +371,14 @@ def _run_shape_group(
         except torch.cuda.OutOfMemoryError:
             if size == 1:
                 raise
-            del image, texture, batched_query
+            retry_smaller = True
+        if retry_smaller:
+            del image, texture, batched_query, logits
             torch.cuda.empty_cache()
             current = size // 2
             continue
+        if logits is None:
+            raise RuntimeError("tile forward did not return logits")
         probabilities = (
             torch.sigmoid(logits[:, 0].detach().float()).cpu().numpy().astype(np.float32)
         )

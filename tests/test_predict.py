@@ -1,5 +1,9 @@
 from pathlib import Path
 
+import gc
+import sys
+import weakref
+
 import numpy as np
 import pytest
 import torch
@@ -365,6 +369,63 @@ def test_cuda_oom_at_batch_size_one_clears_unused_cache_then_reraises(
 
     assert attempts == [6, 3, 1]
     assert cache_calls == 2
+
+
+def test_empty_cache_runs_only_after_failed_tensors_are_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    request = _write_request(tmp_path, _pattern(90, 70), query_box=(0, 0, 4, 4))
+    previous_logits: list[weakref.ref[torch.Tensor]] = []
+    failed_batches: list[tuple[weakref.ref[torch.Tensor], ...]] = []
+    still_held: list[str] = []
+
+    def runner(
+        model: nn.Module,
+        image: torch.Tensor,
+        query: torch.Tensor,
+        texture: torch.Tensor,
+    ) -> torch.Tensor:
+        if not previous_logits and image.shape[0] > 1:
+            logits = torch.ones(
+                image.shape[0], 1, image.shape[2], image.shape[3], dtype=image.dtype
+            )
+            previous_logits.append(weakref.ref(logits))
+            return logits
+        if image.shape[0] > 1:
+            failed_batches.append(
+                (weakref.ref(image), weakref.ref(query), weakref.ref(texture))
+            )
+            raise torch.cuda.OutOfMemoryError("injected oom")
+        return torch.zeros(
+            image.shape[0], 1, image.shape[2], image.shape[3], dtype=image.dtype
+        )
+
+    def empty_cache() -> None:
+        handling_exception = sys.exc_info()[1] is not None
+        gc.collect()
+        held: list[str] = []
+        if not previous_logits or previous_logits[0]() is not None:
+            held.append("previous logits")
+        if not failed_batches or any(
+            ref() is not None for batch in failed_batches for ref in batch
+        ):
+            held.append("failed batch")
+        if handling_exception:
+            held.append("active traceback")
+        if held:
+            still_held.append(", ".join(held))
+
+    monkeypatch.setattr(torch.cuda, "empty_cache", empty_cache)
+    predict_probability(
+        request,
+        [_ConstantLogitModel(0.0)],
+        _prediction_config(tile_size=32, overlap=8, batch_size=4),
+        batch_runner=runner,
+    )
+
+    assert previous_logits
+    assert failed_batches
+    assert still_held == []
 
 
 def test_non_cuda_inference_errors_are_fatal(tmp_path: Path):
