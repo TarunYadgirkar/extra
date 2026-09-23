@@ -3,9 +3,12 @@
 Neural probabilities are produced by ``hatchmatch.predict.predict_probability``
 and classical probabilities by ``hatchmatch.baseline.baseline_probability``.
 This module only consumes caller-supplied maps for examples held out of the
-model that produced them. It reads labels while fitting and scoring. Inference
-must not import those label loaders. The search objective is an out-of-fold
-document-macro IoU, never an official public-validation score.
+model that produced them. Generated CAD is not calibration evidence:
+``load_out_of_fold_examples`` and ``search_postprocess`` fit and score only
+held-out examples whose kind is ``real``. It reads labels while fitting and
+scoring. Inference must not import those label loaders. The search objective
+is an out-of-fold document-macro IoU, never an official public-validation
+score.
 """
 
 from __future__ import annotations
@@ -68,6 +71,7 @@ class FusionChannels:
         example_id: str,
         source_fold: int,
         trained_example_ids: frozenset[str] | Sequence[str],
+        kind: str = "real",
     ) -> None:
         arrays = [
             np.asarray(neural, dtype=np.float32),
@@ -90,6 +94,8 @@ class FusionChannels:
         trained = frozenset(trained_example_ids)
         if any(type(item) is not str or not item for item in trained):
             raise ValueError("trained_example_ids must contain non-empty text")
+        if kind not in {"real", "generated_cad"}:
+            raise ValueError("kind must be 'real' or 'generated_cad'")
         self.neural = arrays[0]
         self.classical = arrays[1]
         self.foreground = arrays[2]
@@ -99,6 +105,7 @@ class FusionChannels:
         self.example_id = example_id
         self.source_fold = source_fold
         self.trained_example_ids = trained
+        self.kind = kind
 
     @property
     def _planes(self) -> tuple[np.ndarray, ...]:
@@ -328,8 +335,13 @@ def search_postprocess(
     known: Sequence[np.ndarray],
     config: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Search postprocessing on one fitted out-of-fold calibrator."""
+    """Search postprocessing on held-out real examples only.
 
+    ``generated_cad`` channels are omitted from the logistic sample and from
+    the document-macro objective. An empty real set raises and writes no score.
+    """
+
+    channels, target, known = _real_examples(channels, target, known)
     output_dir = Path(str(config["output_dir"]))
     seed = int(config["seed"])
     n_trials = int(config["n_trials"])
@@ -437,7 +449,11 @@ def load_out_of_fold_examples(
     config: Mapping[str, Any],
     base_dir: str | Path,
 ) -> tuple[list[FusionChannels], list[np.ndarray], list[np.ndarray]]:
-    """Load held-out maps and labels. Prediction files must not contain labels."""
+    """Load held-out real maps and labels.
+
+    Prediction files must not contain labels. ``generated_cad`` examples are
+    omitted even when they were held out of the source fold.
+    """
 
     base = Path(base_dir)
     manifest_path = (base / str(config["oof_manifest"])).resolve()
@@ -462,11 +478,29 @@ def load_out_of_fold_examples(
         for record in fold_payload["folds"]
         if isinstance(record, dict)
     }
+    from hatchmatch.data import HatchTileDataset, load_training_examples
+
+    training_manifest = (base / str(config["training_manifest"])).resolve()
+    data_root = (base / str(config["data_root"])).resolve()
+    training = load_training_examples(training_manifest, data_root)
+    by_id = {example.id: example for example in training}
     selected: list[tuple[dict[str, Any], frozenset[str], int]] = []
     for entry in entries:
         if not isinstance(entry, dict):
             raise ValueError("out-of-fold example entries must be objects")
-        example_id = entry["id"]
+        example_id = str(entry["id"])
+        example = by_id.get(example_id)
+        if example is None:
+            raise ValueError(
+                f"out-of-fold example {example_id!r} is missing from training labels"
+            )
+        if example.kind == "generated_cad":
+            continue
+        if example.kind != "real":
+            raise ValueError(
+                f"out-of-fold example {example_id!r} has unsupported kind "
+                f"{example.kind!r}"
+            )
         fold_index = int(entry["fold"])
         record = folds[fold_index]
         train_ids = frozenset(str(item) for item in record["train_ids"])
@@ -480,21 +514,11 @@ def load_out_of_fold_examples(
         if not map_path.is_file():
             raise MissingOutOfFoldMaps(map_path)
         selected.append((entry, train_ids, fold_index))
-
-    from hatchmatch.data import HatchTileDataset, load_training_examples
-
-    training_manifest = (base / str(config["training_manifest"])).resolve()
-    data_root = (base / str(config["data_root"])).resolve()
-    training = load_training_examples(training_manifest, data_root)
-    by_id = {example.id: example for example in training}
-    supervised = []
-    for entry, _, _ in selected:
-        example = by_id.get(str(entry["id"]))
-        if example is None:
-            raise ValueError(
-                f"out-of-fold example {entry['id']!r} is missing from training labels"
-            )
-        supervised.append(example)
+    if not selected:
+        raise ValueError(
+            "no held-out real examples are available for calibration"
+        )
+    supervised = [by_id[str(entry["id"])] for entry, _, _ in selected]
     dataset = HatchTileDataset(
         supervised,
         tile_size=8,
@@ -528,6 +552,7 @@ def load_out_of_fold_examples(
                 example_id=example.id,
                 source_fold=fold_index,
                 trained_example_ids=train_ids,
+                kind="real",
             )
         )
         targets.append(arrays.target)
@@ -558,6 +583,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     resolved["output_dir"] = str((base / str(config["output_dir"])).resolve())
     search_postprocess(channels, targets, knowns, resolved)
     return 0
+
+
+def _real_examples(
+    channels: Sequence[FusionChannels],
+    target: Sequence[np.ndarray],
+    known: Sequence[np.ndarray],
+) -> tuple[list[FusionChannels], list[np.ndarray], list[np.ndarray]]:
+    """Drop generated CAD so it cannot enter the sample or the objective."""
+
+    if not (len(channels) == len(target) == len(known)):
+        raise ValueError("channels, target, and known must align")
+    kept_channels: list[FusionChannels] = []
+    kept_target: list[np.ndarray] = []
+    kept_known: list[np.ndarray] = []
+    for channel, target_mask, known_mask in zip(
+        channels, target, known, strict=True
+    ):
+        if not isinstance(channel, FusionChannels):
+            raise TypeError("channels must contain FusionChannels")
+        if channel.kind == "generated_cad":
+            continue
+        kept_channels.append(channel)
+        kept_target.append(target_mask)
+        kept_known.append(known_mask)
+    if not kept_channels:
+        raise ValueError(
+            "no held-out real examples are available for calibration"
+        )
+    return kept_channels, kept_target, kept_known
 
 
 def _known_rows(

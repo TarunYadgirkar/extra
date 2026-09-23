@@ -70,6 +70,7 @@ def _channels(
     trained_example_ids: frozenset[str],
     classical: np.ndarray | None = None,
     source_fold: int = 0,
+    kind: str = "real",
 ) -> FusionChannels:
     shape = neural.shape
     return FusionChannels(
@@ -84,6 +85,7 @@ def _channels(
         example_id=example_id,
         source_fold=source_fold,
         trained_example_ids=trained_example_ids,
+        kind=kind,
     )
 
 
@@ -612,6 +614,264 @@ def test_oof_maps_reject_embedded_labels(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="labels"):
         load_out_of_fold_examples(config, tmp_path)
+
+
+def _polarity_example(
+    size: int,
+    *,
+    positive_on_left: bool,
+    document_id: str,
+    example_id: str,
+    kind: str,
+) -> tuple[FusionChannels, np.ndarray, np.ndarray]:
+    neural = np.zeros((size, size), np.float32)
+    neural[:, : size // 2] = 0.95
+    neural[:, size // 2 :] = 0.05
+    target = np.zeros((size, size), bool)
+    if positive_on_left:
+        target[:, : size // 2] = True
+    else:
+        target[:, size // 2 :] = True
+    known = np.ones((size, size), bool)
+    channel = _channels(
+        neural,
+        document_id=document_id,
+        example_id=example_id,
+        trained_example_ids=frozenset({"train-only"}),
+        classical=np.full(neural.shape, 0.5, np.float32),
+        kind=kind,
+    )
+    return channel, target, known
+
+
+def test_generated_cad_does_not_change_fusion_or_document_objective(
+    tmp_path: Path,
+) -> None:
+    from hatchmatch.calibrate import search_postprocess
+
+    real = _polarity_example(
+        16,
+        positive_on_left=True,
+        document_id="doc-real",
+        example_id="q-real",
+        kind="real",
+    )
+    cad = _polarity_example(
+        32,
+        positive_on_left=False,
+        document_id="doc-cad",
+        example_id="q-cad",
+        kind="generated_cad",
+    )
+    overrides = {"max_pixels_per_document": 4096, "n_trials": 2}
+    real_only = search_postprocess(
+        [real[0]],
+        [real[1]],
+        [real[2]],
+        _search_config(tmp_path / "real", **overrides),
+    )
+    with_cad = search_postprocess(
+        [real[0], cad[0]],
+        [real[1], cad[1]],
+        [real[2], cad[2]],
+        _search_config(tmp_path / "both", **overrides),
+    )
+
+    assert with_cad["official_public_validation"] is False
+    assert with_cad["fusion"]["coefficients"] == real_only["fusion"]["coefficients"]
+    assert with_cad["fusion"]["intercept"] == real_only["fusion"]["intercept"]
+    assert with_cad["parameters"] == real_only["parameters"]
+    assert with_cad["objective"] == real_only["objective"]
+    provenance = json.loads((tmp_path / "both" / "fold-provenance.json").read_text())
+    assert [item["example_id"] for item in provenance["examples"]] == ["q-real"]
+
+    contaminated = FusionCalibrator(
+        max_pixels_per_document=4096,
+        seed=20260923,
+    )
+    contaminated.fit(
+        [real[0], cad[0]],
+        [real[1], cad[1]],
+        [real[2], cad[2]],
+    )
+    assert real_only["fusion"]["coefficients"][0] > 0
+    assert contaminated.to_dict()["coefficients"][0] < 0
+
+    calibrator = FusionCalibrator.from_dict(real_only["fusion"])
+    parameters = real_only["parameters"]
+    real_mask = postprocess(
+        calibrator.predict([real[0]])[0],
+        real[0].foreground,
+        parameters,
+    )
+    cad_mask = postprocess(
+        calibrator.predict([cad[0]])[0],
+        cad[0].foreground,
+        parameters,
+    )
+    real_objective, _ = search_objective(
+        [real_mask],
+        [real[1]],
+        [real[2]],
+        ["doc-real"],
+    )
+    mixed_objective, _ = search_objective(
+        [real_mask, cad_mask],
+        [real[1], cad[1]],
+        [real[2], cad[2]],
+        ["doc-real", "doc-cad"],
+    )
+    assert mixed_objective != pytest.approx(real_objective)
+    assert with_cad["objective"] == pytest.approx(real_objective)
+
+
+def test_search_on_generated_cad_only_writes_no_score(tmp_path: Path) -> None:
+    from hatchmatch.calibrate import search_postprocess
+
+    cad = _polarity_example(
+        8,
+        positive_on_left=False,
+        document_id="doc-cad",
+        example_id="q-cad",
+        kind="generated_cad",
+    )
+    output_dir = tmp_path / "cad-only"
+
+    with pytest.raises(ValueError, match="real"):
+        search_postprocess(
+            [cad[0]],
+            [cad[1]],
+            [cad[2]],
+            _search_config(output_dir, n_trials=1),
+        )
+
+    assert not (output_dir / "best.json").exists()
+
+
+def _write_kind_fixture(root: Path, *, include_real: bool) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    examples = []
+    oof_examples = []
+    valid_ids = []
+    specs = [("q-train", "doc-train", "real", False)]
+    if include_real:
+        specs.append(("q-real", "doc-real", "real", True))
+        valid_ids.append("q-real")
+    specs.append(("q-cad", "doc-cad", "generated_cad", True))
+    valid_ids.append("q-cad")
+    for example_id, document_id, kind, held_out in specs:
+        _write_labeled_example(
+            root,
+            example_id=example_id,
+            document_id=document_id,
+        )
+        examples.append(
+            {
+                "id": example_id,
+                "document_id": document_id,
+                "kind": kind,
+                "image": f"{example_id}.png",
+                "width": 8,
+                "height": 8,
+                "query_box": [0, 0, 1, 1],
+                "context_boxes": [],
+                "labels": {
+                    "positive_mask": f"{example_id}-positive.png",
+                    "known_mask": f"{example_id}-known.png",
+                },
+            }
+        )
+        if not held_out:
+            continue
+        neural = np.full((8, 8), 0.05, np.float32)
+        if kind == "real":
+            neural[2:6, 2:6] = 0.95
+        else:
+            neural[:, :] = 0.95
+            neural[2:6, 2:6] = 0.05
+        map_name = f"{example_id}.npz"
+        np.savez(
+            root / map_name,
+            neural=neural,
+            classical=neural.copy(),
+            foreground=np.ones((8, 8), np.float32),
+            local_variance=np.full((8, 8), 0.3, np.float32),
+            query_compatibility=neural.copy(),
+        )
+        oof_examples.append({"id": example_id, "fold": 0, "path": map_name})
+    (root / "train.json").write_text(
+        json.dumps(
+            {"schema": "hatch-matching-challenge/v1", "examples": examples}
+        ),
+        encoding="utf-8",
+    )
+    (root / "folds.json").write_text(
+        json.dumps(
+            {
+                "schema": "hatchmatch-group-folds/v1",
+                "folds": [
+                    {
+                        "fold": 0,
+                        "train_ids": ["q-train"],
+                        "valid_ids": valid_ids,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "oof.json").write_text(
+        json.dumps(
+            {"schema": "hatchmatch-oof-maps/v1", "examples": oof_examples}
+        ),
+        encoding="utf-8",
+    )
+    config_path = root / "search.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "schema": "hatchmatch-calibration-search/v1",
+                "seed": 20260923,
+                "recall_floor": 0.95,
+                "n_trials": 1,
+                "max_pixels_per_document": 64,
+                "output_dir": "calibration-out",
+                "oof_manifest": "oof.json",
+                "fold_manifest": "folds.json",
+                "training_manifest": "train.json",
+                "data_root": ".",
+                "parameters": {
+                    "threshold": {"low": 0.2, "high": 0.8},
+                    "min_component": {"low": 1, "high": 4},
+                    "close_radius": {"low": 0, "high": 1},
+                    "foreground_floor": {"low": 0.0, "high": 0.2},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def test_load_out_of_fold_examples_excludes_generated_cad(tmp_path: Path) -> None:
+    from hatchmatch.calibrate import load_out_of_fold_examples
+
+    config_path = _write_kind_fixture(tmp_path, include_real=True)
+    config = yaml.safe_load(config_path.read_text())
+
+    channels, targets, knowns = load_out_of_fold_examples(config, tmp_path)
+
+    assert [channel.example_id for channel in channels] == ["q-real"]
+    assert [channel.kind for channel in channels] == ["real"]
+    assert len(targets) == len(knowns) == 1
+
+    cad_only = tmp_path / "cad-only"
+    cad_config = yaml.safe_load(
+        _write_kind_fixture(cad_only, include_real=False).read_text()
+    )
+    with pytest.raises(ValueError, match="real"):
+        load_out_of_fold_examples(cad_config, cad_only)
+    assert not (cad_only / "calibration-out" / "best.json").exists()
 
 
 def test_calibrate_import_does_not_load_training_labels() -> None:
