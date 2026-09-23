@@ -85,3 +85,10 @@ python challenge/evaluate.py \
   --predictions predictions \
   --output metrics.json
 ```
+
+## Reproducibility audit
+
+The commands that completed on a clean CPU-only environment, the measured
+pytest wall time, the existing capped-1600 baseline metrics path, and the
+unscored neural ensemble are recorded in
+[docs/reproducibility.md](docs/reproducibility.md).
