@@ -336,7 +336,7 @@ def test_cuda_oom_retries_the_same_tiles_by_halving_until_one(
 def test_cuda_oom_at_batch_size_one_clears_unused_cache_then_reraises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    request = _write_request(tmp_path, _pattern(18, 18), query_box=(0, 0, 4, 4))
+    request = _write_request(tmp_path, _pattern(30, 30), query_box=(0, 0, 4, 4))
     attempts: list[int] = []
     cache_calls = 0
 
