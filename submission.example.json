@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "repository": "https://github.com/TarunYadgirkar/extra",
   "commit": "530fcda1b116a8f011587cf8d7a4c30ce1ee68b1",
-  "inference_command": "python inference.py --inputs validation-inputs.json --data-root dataset --output-dir predictions --config configs/baseline-eval-1600.yaml",
+  "inference_command": "python inference.py --inputs validation-inputs.json --data-root dataset --output-dir predictions --config configs/final.yaml",
   "environment": "pyproject.toml",
   "weights": [],
   "validation_metrics": "metrics.json",
