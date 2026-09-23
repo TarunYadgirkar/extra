@@ -5,7 +5,8 @@ A run is usable only when ``config.json`` and ``metrics.json`` still match
 unedited metrics file. ``--run`` and ``--output`` are enough for a sealed run:
 repository identity comes from git, dataset and evaluator identity come from
 the pinned challenge checkout, and hardware comes from this machine. Timing
-comes from the run when it was recorded. Unmeasured timing stays null.
+comes from the run when nonnegative durations were recorded. A sealed run
+without those durations exits before any submission file is written.
 """
 
 from __future__ import annotations
@@ -48,9 +49,6 @@ NO_PRIVATE_TEST = "This bundle does not display private-test material."
 TIMING_DEFINITION = (
     "Wall clock covering loading, preprocessing, inference, file writing, "
     "and initialization."
-)
-UNMEASURED_TIMING = (
-    "Timing was not measured. The recorded nulls are not measurements."
 )
 DEFAULT_INFERENCE_COMMAND = (
     "python inference.py --inputs validation-inputs.json "
@@ -317,6 +315,12 @@ def build_submission(
         time_spent_hours=time_spent_hours,
         peak_memory_mb=peak_memory_mb,
     )
+    if not _nonnegative_duration(runtime_seconds) or not _nonnegative_duration(
+        time_spent_hours
+    ):
+        raise SubmissionBuildError(
+            "refusing to build a submission: inference timing was not measured"
+        )
     identity = _identity(
         repository=repository if repository is not None else _repository_url(),
         commit=commit if commit is not None else _git_head(ROOT),
@@ -366,11 +370,7 @@ def build_submission(
             destination.parent.mkdir(parents=True, exist_ok=True)
             image.save(destination, format="PNG")
             records[relative] = {**artifact_record(destination), "path": relative}
-        report = _bundle_report(
-            iou,
-            official=official,
-            timing_unmeasured=runtime_seconds is None and time_spent_hours is None,
-        )
+        report = _bundle_report(iou, official=official)
         _store_bytes(output, records, "technical-report.md", report.encode("utf-8"))
         submission = _submission(identity)
         _store_bytes(
@@ -406,8 +406,7 @@ def build_submission(
                 "submission manifest does not match artifact bytes: "
                 + ", ".join(mismatches)
             )
-        if runtime_seconds is not None and time_spent_hours is not None:
-            _validate_with_official_schema(output / "submission.json")
+        _validate_with_official_schema(output / "submission.json")
     except Exception:
         if output.exists():
             _remove_tree(output)
@@ -593,8 +592,6 @@ def _identity(
     )
     if not official_public_validation:
         resources.append(ENSEMBLE_STATUS)
-    if runtime_seconds is None and time_spent_hours is None:
-        resources.append(UNMEASURED_TIMING)
     return {
         "repository": repository,
         "commit": commit,
@@ -704,7 +701,7 @@ def _archive_predictions(files: Sequence[Path], destination: Path) -> None:
                 archive.addfile(info, handle)
 
 
-def _bundle_report(iou: float, *, official: bool, timing_unmeasured: bool) -> str:
+def _bundle_report(iou: float, *, official: bool) -> str:
     measured = json.dumps(iou)
     lines = [
         "# Submission bundle report",
@@ -722,8 +719,6 @@ def _bundle_report(iou: float, *, official: bool, timing_unmeasured: bool) -> st
     else:
         lines.append(ENSEMBLE_STATUS)
     lines.extend(["", FIXTURE_EXAMPLES, "", NO_PRIVATE_TEST, ""])
-    if timing_unmeasured:
-        lines.extend([UNMEASURED_TIMING, ""])
     lines.extend(
         [
             "## Limitations",
@@ -795,10 +790,17 @@ def _https_url(value: str, name: str) -> None:
         raise SubmissionBuildError(f"{name} must be a valid HTTPS URL")
 
 
+def _nonnegative_duration(value: Any) -> bool:
+    return (
+        type(value) in (int, float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
+
+
 def _nonnegative(value: Any, name: str) -> None:
-    if type(value) not in (int, float) or isinstance(value, bool) or not math.isfinite(
-        value
-    ) or value < 0:
+    if not _nonnegative_duration(value):
         raise SubmissionBuildError(f"{name} must be a finite nonnegative number")
 
 
