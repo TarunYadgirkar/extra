@@ -425,7 +425,7 @@ def test_verified_checkpoints_supply_averaged_fold_weights(tmp_path: Path):
         paths.append(path)
 
     request = _write_request(tmp_path, np.full((8, 9), 180, np.uint8))
-    config = _prediction_config(tile_size=32, overlap=8, batch_size=1)
+    config = _prediction_config(tile_size=64, overlap=16, batch_size=1, query_size=96)
     from_modules = predict_probability(request, [first, second], config)
     from_checkpoints = predict_probability(request, paths, config)
     np.testing.assert_allclose(from_checkpoints, from_modules, atol=1e-5)
