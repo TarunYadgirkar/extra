@@ -293,20 +293,17 @@ def test_two_flag_cli_builds_sealed_fixture_and_passes_official_validator(
     _validate_official(output / "submission.json")
 
 
-def test_unmeasured_timing_is_null_and_not_a_measurement(tmp_path: Path) -> None:
+def test_untimed_sealed_run_exits_2_and_writes_nothing(tmp_path: Path) -> None:
     run = _sealed_run(tmp_path, document_macro_iou=0.33, command="final")
+    metrics_bytes = (run / "metrics.json").read_bytes()
     output = tmp_path / "dist"
     completed = _run_cli(run, output)
-    assert completed.returncode == 0, completed.stderr
-    submission = json.loads((output / "submission.json").read_text(encoding="utf-8"))
-    assert submission["runtime_seconds"] is None
-    assert submission["time_spent_hours"] is None
-    assert submission["peak_memory_mb"] is None
-    report = (output / "technical-report.md").read_text(encoding="utf-8")
-    assert "The recorded nulls are not measurements." in report
-    assert "The neural ensemble has not been trained or scored here." in report
-    assert "Measured document-macro IoU in the unedited metrics file: 0.33." in report
-    assert "0.4779169321" not in report
+    assert completed.returncode == 2
+    assert "inference timing was not measured" in completed.stderr
+    assert not output.exists()
+    assert (run / "metrics.json").read_bytes() == metrics_bytes
+    assert "0.4779169321" not in completed.stdout
+    assert "0.4779169321" not in completed.stderr
 
 
 def test_cli_refuses_unsealed_final_run(tmp_path: Path) -> None:
