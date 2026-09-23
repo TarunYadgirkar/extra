@@ -15,6 +15,7 @@ tta:
   - vertical
   - rot90
 calibration: ../runs/calibration/best.json
+run_dir: ../runs/final
 checkpoints:
   - path: ../runs/train-b2/fold-0/seed-20260922/best.pt
   - path: ../runs/train-b2/fold-0/seed-20260923/best.pt
