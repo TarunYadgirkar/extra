@@ -650,12 +650,20 @@ def run_predict_oof(config_path: str | Path, *, execute: bool = False) -> int:
     output = (path.parent / output_name).resolve()
     try:
         refuse_completed_overwrite(output)
-        write_oof_predictions(loaded, path.parent)
+        manifest = write_oof_predictions(loaded, path.parent)
     except FileExistsError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+    examples = manifest.get("examples") if isinstance(manifest, dict) else None
+    if not isinstance(examples, list) or len(examples) == 0:
+        print(
+            "error: refusing to seal an empty out-of-fold example list; "
+            "held-out probability maps were not written",
+            file=sys.stderr,
+        )
         return 2
     _write_json(
         output / "metrics.json",

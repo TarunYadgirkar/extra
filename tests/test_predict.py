@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import cv2
 import gc
 import sys
 import weakref
@@ -77,7 +78,18 @@ def test_overlapping_tiles_use_a_clipped_hann_blend():
 
 
 def _sigmoid(values: np.ndarray) -> np.ndarray:
-    return (1.0 / (1.0 + np.exp(-values))).astype(np.float32)
+    logits = torch.as_tensor(values, dtype=torch.float32)
+    return torch.sigmoid(logits).numpy().astype(np.float32)
+
+
+def _normalized_channel(gray: np.ndarray) -> np.ndarray:
+    from hatchmatch.normalize import segformer_image_tensor
+
+    return segformer_image_tensor(gray).numpy()[0]
+
+
+def _content_probability(gray: np.ndarray) -> np.ndarray:
+    return _sigmoid(_normalized_channel(gray) * 50.0 - 25.0)
 
 
 def _write_request(
@@ -161,7 +173,7 @@ def test_predict_probability_returns_native_float32_for_odd_and_small_images(
             [model],
             _prediction_config(tile_size=16, overlap=4, batch_size=3),
         )
-        expected = _sigmoid(gray.astype(np.float32) / 255.0 * 50 - 25)
+        expected = _content_probability(gray)
         assert probability.shape == (height, width)
         assert probability.dtype == np.float32
         np.testing.assert_allclose(probability, expected, atol=1e-5)
@@ -187,13 +199,13 @@ def test_small_image_is_reflect_padded_and_uses_compact_texture(tmp_path: Path):
         _prediction_config(tile_size=32, overlap=8),
     )
 
-    expected = _sigmoid(gray.astype(np.float32) / 255.0 * 50 - 25)
+    expected = _content_probability(gray)
     np.testing.assert_allclose(probability, expected, atol=1e-5)
     seen = model.images[0]
     assert seen.shape[-2:] == (32, 32)
-    np.testing.assert_allclose(seen[0, 0, :8, :10], gray / 255.0, atol=1e-6)
-    assert seen[0, 0, 8, 0] == pytest.approx(gray[-2, 0] / 255.0)
-    padded = np.round(seen[0, 0] * 255.0).astype(np.uint8)
+    padded = cv2.copyMakeBorder(gray, 0, 24, 0, 22, cv2.BORDER_REFLECT_101)
+    np.testing.assert_allclose(seen[0, 0], _normalized_channel(padded), atol=1e-5)
+    assert seen[0, 0, 8, 0] == pytest.approx(_normalized_channel(padded)[8, 0])
     np.testing.assert_allclose(
         model.textures[0][0],
         np.moveaxis(compact_texture_channels(padded), -1, 0),
@@ -209,7 +221,7 @@ def test_tta_is_reversed_into_native_coordinates(tmp_path: Path):
         dtype=np.uint8,
     )
     request = _write_request(tmp_path, gray)
-    expected = _sigmoid(gray.astype(np.float32) / 255.0 * 50 - 25)
+    expected = _content_probability(gray)
     transforms = {
         "horizontal": lambda array: np.flip(array, axis=-1),
         "vertical": lambda array: np.flip(array, axis=-2),
@@ -232,7 +244,7 @@ def test_tta_is_reversed_into_native_coordinates(tmp_path: Path):
         observed = native[:, : transformed.shape[1]]
         if name == "rot90":
             observed = model.images[0][0, 0, : transformed.shape[0], : transformed.shape[1]]
-        np.testing.assert_allclose(observed, transformed / 255.0, atol=1e-6)
+        np.testing.assert_allclose(observed, _normalized_channel(transformed), atol=1e-5)
         restored_query = invert(model.queries[0][0])
         identity = _ContentModel()
         predict_probability(request, [identity], _prediction_config())
@@ -333,7 +345,7 @@ def test_cuda_oom_retries_the_same_tiles_by_halving_until_one(
     assert list(fingerprints[2]) == ordered[:2]
     assert cache_calls == 3
     np.testing.assert_allclose(oom, direct, atol=1e-5)
-    expected = _sigmoid(_pattern(90, 70).astype(np.float32) / 255.0 * 50 - 25)
+    expected = _content_probability(_pattern(90, 70))
     np.testing.assert_allclose(oom, expected, atol=1e-5)
 
 

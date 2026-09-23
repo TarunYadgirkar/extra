@@ -540,7 +540,10 @@ def test_explicit_blank_is_preferred_even_when_its_pixels_are_dark(
     item = dataset[blank_index]
 
     assert item["known"][0, 1, 1].item() == 1.0
-    assert item["image"][0, 1, 1].item() == 0.0
+    from hatchmatch.normalize import segformer_image_tensor
+
+    black = segformer_image_tensor(np.zeros((1, 1), dtype=np.uint8))
+    torch.testing.assert_close(item["image"][:, 1, 1], black[:, 0, 0])
 
 
 def test_default_cache_retains_at_most_one_full_example(tmp_path: Path) -> None:

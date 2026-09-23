@@ -3,12 +3,24 @@
 ## Input and output contract
 
 Inference reads a label-free request manifest and the original drawings. It
-writes one native-resolution binary PNG per request id. The command accepted
-by the official submission schema is:
+writes one native-resolution binary PNG per request id.
+
+Native classical inference is separate from the capped-1600 evaluation. It
+scores each original drawing with `baseline_probability` and does not resize
+the page to a working-resolution cap. `configs/test.yaml` selects that
+classical mode:
 
 ```bash
-python inference.py --inputs validation-inputs.json --data-root dataset --output-dir predictions --config configs/baseline-eval-1600.yaml
+python inference.py --inputs validation-inputs.json --data-root dataset --output-dir predictions --config configs/test.yaml
 ```
+
+The native experiment config is `configs/baseline.yaml` (`max_dimension: null`):
+
+```bash
+python scripts/run_experiments.py baseline --config configs/baseline.yaml
+```
+
+That native command was not the source of `runs/baseline-eval-1600/metrics.json`.
 
 Annotation masks, annotation rectangles, expected counts, and private labels
 are not inference inputs. Unknown pixels and supplied query or context
@@ -41,6 +53,15 @@ That cached reference is 37 real queries across 12 documents
 It is not the public-validation split and it is not the private test.
 
 The only measured challenge score is the capped-1600 classical baseline document-macro IoU 0.4779169321.
+
+That score was produced by the capped classical experiment:
+
+```bash
+python scripts/run_experiments.py baseline --config configs/baseline-eval-1600.yaml
+```
+
+`configs/baseline-eval-1600.yaml` sets `max_dimension: 1600`. Native classical
+inference is the separate path described above.
 
 The unedited evaluator file `runs/baseline-eval-1600/metrics.json` records
 the full value 0.4779169321376195. Its SHA-256 is

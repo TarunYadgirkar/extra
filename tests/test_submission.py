@@ -338,6 +338,19 @@ def test_submission_example_passes_official_validator() -> None:
     _validate_official(path)
 
 
+def test_technical_report_does_not_reproduce_capped_score_with_inference_py() -> None:
+    report = (ROOT / "docs" / "technical-report.md").read_text(encoding="utf-8")
+    for line in report.splitlines():
+        assert not ("inference.py" in line and "baseline-eval-1600" in line), line
+    assert (
+        "python scripts/run_experiments.py baseline "
+        "--config configs/baseline-eval-1600.yaml"
+    ) in report
+    assert "configs/baseline.yaml" in report
+    assert "native" in report.lower()
+    assert "classical" in report.lower()
+
+
 def test_technical_report_separates_historical_reference_from_measured_score() -> None:
     report = (ROOT / "docs" / "technical-report.md").read_text(encoding="utf-8")
     assert (

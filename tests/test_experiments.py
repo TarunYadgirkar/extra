@@ -642,6 +642,25 @@ def test_predict_oof_execute_seals_a_writer_fixture(
     assert "summary" not in metrics
 
 
+def test_predict_oof_execute_does_not_seal_an_empty_example_list(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.write_bytes(b"tiny-checkpoint")
+    config_path = tmp_path / "predict.yaml"
+    config_path.write_text(
+        "checkpoints:\n  - path: best.pt\noutput_dir: oof-out\n",
+        encoding="utf-8",
+    )
+
+    code = experiments.run_predict_oof(config_path, execute=True)
+
+    output = tmp_path / "oof-out"
+    assert code != 0
+    assert not (output / "metrics.json").exists()
+    assert not (output / "provenance.json").exists()
+
+
 def test_predict_oof_execute_fails_closed_without_checkpoints(
     tmp_path: Path,
 ) -> None:

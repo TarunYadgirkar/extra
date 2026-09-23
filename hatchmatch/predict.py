@@ -13,6 +13,7 @@ import torch
 from PIL import Image
 from torch import Tensor, nn
 
+import hatchmatch.normalize as image_norm
 from hatchmatch.checkpoints import load_verified_checkpoint
 from hatchmatch.contracts import Request
 from hatchmatch.features import compact_texture_channels
@@ -243,8 +244,7 @@ def _extract_tile(gray: np.ndarray, tile: Tile, size: int) -> np.ndarray:
 
 
 def _image_tensor(gray: np.ndarray) -> Tensor:
-    rgb = np.repeat(gray[None].astype(np.float32) / np.float32(255.0), 3, axis=0)
-    return torch.from_numpy(np.ascontiguousarray(rgb))
+    return image_norm.segformer_image_tensor(gray)
 
 
 def _texture_tensor(gray: np.ndarray) -> Tensor:

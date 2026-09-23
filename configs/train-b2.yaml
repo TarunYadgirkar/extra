@@ -16,7 +16,6 @@ data:
   checksum_file: ../dataset/checksums.json
   tile_size: 256
   query_size: 96
-  validation_size: 256
   cache_size: 1
   workers: 4
 

@@ -25,7 +25,6 @@ from hatchmatch.train import (
     _gather_query_records,
     _gather_rank_states,
     _load_fold,
-    _native_query_iou_records,
     _resume_invariants,
     _select_run_seeds,
     _validate_resume_checkpoint,
@@ -211,21 +210,100 @@ def test_validation_keeps_native_thin_positive_eligible(tmp_path: Path) -> None:
         labels=labels,
     )
     dataset = _ValidationDataset([example], size=2, query_size=2)
-
     item = dataset[0]
-    batch = _validation_collate([item])
-    records = _native_query_iou_records(
-        torch.full((1, 1, 2, 2), -10.0),
-        batch["native_target"],
-        batch["native_known"],
-        batch["content_box"],
-        batch["document_id"],
+    assert item["target"].shape == (1, 8, 8)
+    assert float(item["target"].sum().item()) == 1.0
+
+    class _NegativeModel(nn.Module):
+        def forward(
+            self, image: torch.Tensor, query: torch.Tensor, texture: torch.Tensor
+        ) -> torch.Tensor:
+            return torch.full(
+                (image.shape[0], 1, image.shape[2], image.shape[3]),
+                -20.0,
+            )
+
+    from hatchmatch.train import _validate
+
+    metric = _validate(
+        _NegativeModel(),
+        DataLoader(dataset, batch_size=1, collate_fn=_validation_collate),
+        torch.device("cpu"),
+        amp=False,
         threshold=0.5,
     )
 
-    assert item["target"].shape == (1, 8, 8)
-    assert item["target"].sum().item() == 1
-    assert records == [("doc-thin", 0.0)]
+    assert metric == 0.0
+
+
+class _DarkInkModel(nn.Module):
+    """Positive logit only where the first image channel is still dark ink."""
+
+    def forward(
+        self, image: torch.Tensor, query: torch.Tensor, texture: torch.Tensor
+    ) -> torch.Tensor:
+        dark = image[:, :1] < 0.2
+        positive = torch.full_like(image[:, :1], 20.0)
+        negative = torch.full_like(image[:, :1], -20.0)
+        return torch.where(dark, positive, negative)
+
+
+def test_native_tiled_validation_keeps_thin_stroke_eligible(tmp_path: Path) -> None:
+    """A one-pixel native stroke must survive validation tiling.
+
+    Letterboxing the whole drawing down to the tile size averages that stroke
+    away, so a dark-ink model would miss it and the query would score 0.
+    """
+
+    from hatchmatch.contracts import Box
+    from hatchmatch.train import _validate
+
+    drawing = np.full((8, 8), 255, dtype=np.uint8)
+    drawing[6, 6] = 0
+    positive = np.zeros((8, 8), dtype=np.uint8)
+    positive[6, 6] = 255
+    known = np.full((8, 8), 255, dtype=np.uint8)
+    Image.fromarray(drawing).save(tmp_path / "drawing.png")
+    Image.fromarray(positive).save(tmp_path / "positive.png")
+    Image.fromarray(known).save(tmp_path / "known.png")
+    labels = TrainingLabels(
+        masks={
+            "positive": tmp_path / "positive.png",
+            "negative": None,
+            "known": tmp_path / "known.png",
+            "blank": None,
+        },
+        boxes={name: () for name in ("positive", "negative", "known", "blank")},
+        explicit_known=True,
+    )
+    example = TrainingExample(
+        id="thin-stroke",
+        document_id="doc-thin",
+        kind="real",
+        image=tmp_path / "drawing.png",
+        width=8,
+        height=8,
+        query_box=Box(0, 0, 1, 1),
+        context_boxes=(),
+        labels=labels,
+    )
+    dataset = _ValidationDataset([example], size=4, query_size=2)
+    loader = DataLoader(
+        dataset,
+        batch_size=1,
+        collate_fn=_validation_collate,
+    )
+
+    metric = _validate(
+        _DarkInkModel(),
+        loader,
+        torch.device("cpu"),
+        amp=False,
+        threshold=0.5,
+    )
+
+    assert dataset[0]["target"].sum().item() == 1
+    assert metric == pytest.approx(1.0)
 
 
 class _OverflowScaler:

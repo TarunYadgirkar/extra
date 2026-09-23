@@ -17,6 +17,7 @@ from PIL import Image, UnidentifiedImageError
 from sklearn.model_selection import StratifiedGroupKFold
 from torch.utils.data import Dataset
 
+import hatchmatch.normalize as image_norm
 from hatchmatch.augment import augment_training_sample
 from hatchmatch.contracts import Box
 from hatchmatch.features import compact_texture_channels
@@ -725,12 +726,8 @@ class HatchTileDataset(Dataset[dict[str, torch.Tensor]]):
             target = target.copy()
             known = known.copy()
 
-        image_tensor = torch.from_numpy(
-            np.repeat(image[None, :, :], 3, axis=0).astype(np.float32) / 255.0
-        )
-        query_tensor = torch.from_numpy(
-            np.repeat(query[None, :, :], 3, axis=0).astype(np.float32) / 255.0
-        )
+        image_tensor = image_norm.segformer_image_tensor(image)
+        query_tensor = image_norm.segformer_image_tensor(query)
         texture_tensor = torch.from_numpy(
             np.moveaxis(compact_texture_channels(image), -1, 0).copy()
         )

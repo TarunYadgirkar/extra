@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -29,6 +28,7 @@ from torch.optim import AdamW, Optimizer
 from torch.optim.lr_scheduler import CosineAnnealingLR, LRScheduler
 from torch.utils.data import DataLoader, Dataset, DistributedSampler, Sampler
 
+import hatchmatch.normalize as image_norm
 from hatchmatch.checkpoints import load_verified_checkpoint, save_checkpoint
 from hatchmatch.data import (
     FOLD_SCHEMA,
@@ -37,9 +37,9 @@ from hatchmatch.data import (
     load_training_examples,
     make_group_folds,
 )
-from hatchmatch.features import compact_texture_channels
 from hatchmatch.losses import masked_segmentation_loss
 from hatchmatch.model import QuerySegFormer
+from hatchmatch.predict import _letterbox, _predict_view
 
 
 class ExponentialMovingAverage:
@@ -296,44 +296,8 @@ class _DistributedEvaluationSampler(Sampler[int]):
         return len(range(self.rank, self.size, self.world_size))
 
 
-def _letterbox(
-    array: np.ndarray,
-    size: int,
-    *,
-    interpolation: int,
-    fill: int | bool,
-) -> np.ndarray:
-    height, width = array.shape[:2]
-    scale = min(size / width, size / height)
-    resized_width = max(1, min(size, round(width * scale)))
-    resized_height = max(1, min(size, round(height * scale)))
-    resized = cv2.resize(
-        array.astype(np.uint8),
-        (resized_width, resized_height),
-        interpolation=interpolation,
-    )
-    output = np.full((size, size), fill, dtype=resized.dtype)
-    x0 = (size - resized_width) // 2
-    y0 = (size - resized_height) // 2
-    output[y0 : y0 + resized_height, x0 : x0 + resized_width] = resized
-    return output
-
-
-def _letterbox_content_box(
-    height: int,
-    width: int,
-    size: int,
-) -> tuple[int, int, int, int]:
-    scale = min(size / width, size / height)
-    resized_width = max(1, min(size, round(width * scale)))
-    resized_height = max(1, min(size, round(height * scale)))
-    x0 = (size - resized_width) // 2
-    y0 = (size - resized_height) // 2
-    return y0, y0 + resized_height, x0, x0 + resized_width
-
-
-class _ValidationDataset(Dataset[dict[str, Tensor | str]]):
-    """Return each held-out query exactly once with its known domain."""
+class _ValidationDataset(Dataset[dict[str, Tensor | np.ndarray | str]]):
+    """Return each held-out query once at its native resolution."""
 
     def __init__(
         self,
@@ -341,10 +305,20 @@ class _ValidationDataset(Dataset[dict[str, Tensor | str]]):
         *,
         size: int,
         query_size: int,
+        overlap: int | None = None,
     ) -> None:
+        if type(size) is not int or size <= 0:
+            raise ValueError("validation tile size must be a positive integer")
+        if type(query_size) is not int or query_size <= 0:
+            raise ValueError("query_size must be a positive integer")
+        if overlap is None:
+            overlap = size // 4
+        if type(overlap) is not int or not 0 <= overlap < size:
+            raise ValueError("validation overlap must be an integer in [0, tile size)")
         self.examples = tuple(examples)
-        self.size = size
+        self.tile_size = size
         self.query_size = query_size
+        self.overlap = overlap
         self._source = HatchTileDataset(
             examples,
             tile_size=size,
@@ -358,37 +332,13 @@ class _ValidationDataset(Dataset[dict[str, Tensor | str]]):
     def __len__(self) -> int:
         return len(self.examples)
 
-    def __getitem__(self, index: int) -> dict[str, Tensor | str]:
+    def __getitem__(self, index: int) -> dict[str, Tensor | np.ndarray | str]:
         arrays = self._source._load_arrays(index)
-        image = _letterbox(
-            arrays.image,
-            self.size,
-            interpolation=cv2.INTER_AREA,
-            fill=255,
-        )
-        query = _letterbox(
-            arrays.query,
-            self.query_size,
-            interpolation=cv2.INTER_AREA,
-            fill=255,
-        )
         return {
-            "image": torch.from_numpy(
-                np.repeat(image[None], 3, axis=0).astype(np.float32) / 255.0
-            ),
-            "query": torch.from_numpy(
-                np.repeat(query[None], 3, axis=0).astype(np.float32) / 255.0
-            ),
-            "texture": torch.from_numpy(
-                np.moveaxis(compact_texture_channels(image), -1, 0).copy()
-            ),
+            "native_image": np.ascontiguousarray(arrays.image),
+            "native_query": np.ascontiguousarray(arrays.query),
             "target": torch.from_numpy(arrays.target[None].astype(np.float32)),
             "known": torch.from_numpy(arrays.known[None].astype(np.float32)),
-            "content_box": _letterbox_content_box(
-                arrays.image.shape[0],
-                arrays.image.shape[1],
-                self.size,
-            ),
             "document_id": self.examples[index].document_id,
         }
 
@@ -397,12 +347,10 @@ def _validation_collate(
     items: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     return {
-        key: torch.stack([item[key] for item in items])
-        for key in ("image", "query", "texture")
-    } | {
+        "native_image": [item["native_image"] for item in items],
+        "native_query": [item["native_query"] for item in items],
         "native_target": [item["target"] for item in items],
         "native_known": [item["known"] for item in items],
-        "content_box": [item["content_box"] for item in items],
         "document_id": [item["document_id"] for item in items],
     }
 
@@ -418,52 +366,22 @@ def _to_device(batch: Mapping[str, Any], device: torch.device) -> dict[str, Tens
     }
 
 
-def _native_query_iou_records(
-    logits: Tensor,
-    native_target: Sequence[Tensor],
-    native_known: Sequence[Tensor],
-    content_boxes: Sequence[Sequence[int]],
-    document_ids: Sequence[str],
-    threshold: float,
-) -> list[tuple[str, float]]:
-    """Project predictions to native size, then score untouched known domains."""
+def _threshold_logits(probability: np.ndarray, threshold: float) -> Tensor:
+    """Map a native probability map to logits that preserve one threshold."""
 
-    if not (
-        logits.shape[0]
-        == len(native_target)
-        == len(native_known)
-        == len(content_boxes)
-        == len(document_ids)
-    ):
-        raise ValueError("native validation batch metadata must have equal lengths")
-    records: list[tuple[str, float]] = []
-    for index, (target, known, box, document_id) in enumerate(
-        zip(
-            native_target,
-            native_known,
-            content_boxes,
-            document_ids,
-            strict=True,
-        )
-    ):
-        y0, y1, x0, x1 = (int(value) for value in box)
-        content_logits = logits[index : index + 1, :, y0:y1, x0:x1]
-        native_logits = torch.nn.functional.interpolate(
-            content_logits,
-            size=target.shape[-2:],
-            mode="bilinear",
-            align_corners=False,
-        )
-        records.extend(
-            _query_iou_records(
-                native_logits,
-                target[None].to(logits.device),
-                known[None].to(logits.device),
-                [document_id],
-                threshold,
-            )
-        )
-    return records
+    selected = torch.from_numpy(np.ascontiguousarray(probability))
+    return torch.where(
+        selected >= threshold,
+        torch.full_like(selected, 20.0),
+        torch.full_like(selected, -20.0),
+    )
+
+
+def _as_uint8_image(value: np.ndarray | Tensor) -> np.ndarray:
+    array = value.detach().cpu().numpy() if isinstance(value, Tensor) else np.asarray(value)
+    if array.dtype != np.uint8:
+        array = array.astype(np.uint8)
+    return np.ascontiguousarray(array)
 
 
 def _gather_query_records(
@@ -492,29 +410,57 @@ def _validate(
     amp: bool,
     threshold: float,
 ) -> float | None:
+    """Score native tiled probability maps against untouched known masks."""
+
     model.eval()
+    dataset = loader.dataset
+    tile_size = int(dataset.tile_size)
+    overlap = int(dataset.overlap)
+    query_size = int(dataset.query_size)
+    batch_size = max(1, int(loader.batch_size or 1))
+
+    def runner(
+        module: nn.Module,
+        image: Tensor,
+        query: Tensor,
+        texture: Tensor,
+    ) -> Tensor:
+        with torch.amp.autocast(device.type, enabled=amp):
+            return module(image, query, texture)
+
     local_records: list[tuple[str, float]] = []
     for batch in loader:
-        tensors = {
-            key: batch[key].to(device, non_blocking=True)
-            for key in ("image", "query", "texture")
-        }
-        with torch.amp.autocast(device.type, enabled=amp):
-            logits = model(
-                tensors["image"],
-                tensors["query"],
-                tensors["texture"],
-            )
-        local_records.extend(
-            _native_query_iou_records(
-                logits,
-                batch["native_target"],
-                batch["native_known"],
-                batch["content_box"],
-                batch["document_id"],
-                threshold,
-            )
+        grouped = zip(
+            batch["native_image"],
+            batch["native_query"],
+            batch["native_target"],
+            batch["native_known"],
+            batch["document_id"],
+            strict=True,
         )
+        for image, query, target, known, document_id in grouped:
+            query_tensor = image_norm.segformer_image_tensor(
+                _letterbox(_as_uint8_image(query), query_size)
+            )
+            probability = _predict_view(
+                _as_uint8_image(image),
+                query_tensor,
+                model,
+                tile_size=tile_size,
+                overlap=overlap,
+                batch_size=batch_size,
+                device=device,
+                batch_runner=runner,
+            )
+            local_records.extend(
+                _query_iou_records(
+                    _threshold_logits(probability, threshold)[None, None],
+                    target[None],
+                    known[None],
+                    [str(document_id)],
+                    threshold,
+                )
+            )
     return _macro_from_records(_gather_query_records(local_records))
 
 
@@ -936,7 +882,7 @@ def train_fold(config: Mapping[str, Any], fold: int) -> Path:
         )
         valid_dataset = _ValidationDataset(
             valid_examples,
-            size=int(config["data"]["validation_size"]),
+            size=int(config["data"]["tile_size"]),
             query_size=int(config["data"]["query_size"]),
         )
         valid_sampler = _DistributedEvaluationSampler(
