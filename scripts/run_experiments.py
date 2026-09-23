@@ -250,10 +250,14 @@ def validate_run(run_dir: str | Path) -> list[str]:
 
 
 def refuse_completed_overwrite(run_dir: str | Path) -> None:
-    """Raise when a run already has unedited provenance for its metrics."""
+    """Raise when a run directory already holds any sealed-run file.
+
+    A hash mismatch does not make the directory writable again.
+    """
 
     root = Path(run_dir)
-    if validate_run(root) == []:
+    present = [name for name in REQUIRED_RUN_FILES if (root / name).is_file()]
+    if present:
         raise FileExistsError(f"refusing to overwrite completed run: {root}")
 
 
@@ -264,7 +268,8 @@ def seal_run(
 
     root = Path(run_dir)
     source = Path(config_path).resolve()
-    refuse_completed_overwrite(root)
+    if (root / "config.json").is_file() or (root / "provenance.json").is_file():
+        raise FileExistsError(f"refusing to overwrite completed run: {root}")
     metrics_path = root / "metrics.json"
     if not metrics_path.is_file():
         raise FileNotFoundError(
@@ -325,21 +330,34 @@ def promote_ablation(
 ) -> dict[str, Any]:
     """Promote only a strict real-document macro gain without a collapse.
 
-    ``generated_cad`` records are ignored. A document collapses when its mean
-    IoU falls to zero from a positive baseline. A sharp drop is a loss greater
-    than ``sharp_drop`` on any real document. The returned macros are computed
-    only from the supplied scores and are not official public-validation metrics.
+    ``generated_cad`` records are ignored. Each real document must list the same
+    query ids once on both sides. A document collapses when its mean IoU falls
+    to zero from a positive baseline. A sharp drop is a loss greater than
+    ``sharp_drop`` on any real document. The returned macros are computed only
+    from the supplied scores and are not official public-validation metrics.
     """
 
-    baseline_iou = _real_document_iou(baseline)
-    candidate_iou = _real_document_iou(candidate)
-    if set(baseline_iou) != set(candidate_iou):
-        missing = sorted(set(baseline_iou) - set(candidate_iou))
-        extra = sorted(set(candidate_iou) - set(baseline_iou))
+    baseline_queries = _real_query_scores(baseline)
+    candidate_queries = _real_query_scores(candidate)
+    if set(baseline_queries) != set(candidate_queries):
+        missing = sorted(set(baseline_queries) - set(candidate_queries))
+        extra = sorted(set(candidate_queries) - set(baseline_queries))
         raise ValueError(
             "baseline and candidate real documents differ: "
             f"missing={missing}, extra={extra}"
         )
+    for document_id in sorted(baseline_queries):
+        baseline_ids = set(baseline_queries[document_id])
+        candidate_ids = set(candidate_queries[document_id])
+        if baseline_ids != candidate_ids:
+            missing = sorted(baseline_ids - candidate_ids)
+            extra = sorted(candidate_ids - baseline_ids)
+            raise ValueError(
+                "baseline and candidate query ids differ for document "
+                f"{document_id}: missing={missing}, extra={extra}"
+            )
+    baseline_iou = _document_means(baseline_queries)
+    candidate_iou = _document_means(candidate_queries)
     collapsed = sorted(
         document_id
         for document_id, score in baseline_iou.items()
@@ -440,8 +458,11 @@ def run_ablate(config_path: str | Path, scores_path: str | Path | None = None) -
             file=sys.stderr,
         )
         return 2
-    payload = json.loads(Path(scores_path).read_text(encoding="utf-8"))
-    decision = select_ablations(payload)
+    try:
+        decision = _load_ablation_decision(scores_path)
+    except (OSError, json.JSONDecodeError, ValueError, KeyError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     print(
         json.dumps(
             {
@@ -452,29 +473,55 @@ def run_ablate(config_path: str | Path, scores_path: str | Path | None = None) -
             sort_keys=True,
         )
     )
-    print(
-        "error: ablation decisions are not official metrics; "
-        "refusing to write metrics.json",
-        file=sys.stderr,
-    )
-    return 2
+    return 0
 
 
 def run_final(config_path: str | Path, scores_path: str | Path | None = None) -> int:
-    """Select a final ensemble and stop before public validation."""
+    """Seal the selected ensemble and stop before public validation."""
 
     refused = _refuse_missing_score_gate(config_path)
     if refused is not None:
         return refused
-    if scores_path is not None:
-        payload = json.loads(Path(scores_path).read_text(encoding="utf-8"))
-        select_ablations(payload)
-    print(
-        "error: official public validation was not launched; "
-        "refusing to fabricate metrics",
-        file=sys.stderr,
+    if scores_path is None:
+        print(
+            "error: caller-supplied real-document out-of-fold scores are "
+            "required; refusing to fabricate metrics",
+            file=sys.stderr,
+        )
+        return 2
+    path = Path(config_path).resolve()
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    run_value = loaded.get("run_dir") if isinstance(loaded, dict) else None
+    if not isinstance(run_value, str) or not run_value:
+        print(
+            "error: run_dir is required; refusing to fabricate metrics",
+            file=sys.stderr,
+        )
+        return 2
+    run_dir = (path.parent / run_value).resolve()
+    try:
+        refuse_completed_overwrite(run_dir)
+        decision = _load_ablation_decision(scores_path)
+    except FileExistsError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except (OSError, json.JSONDecodeError, ValueError, KeyError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    run_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        run_dir / "metrics.json",
+        {
+            "schema": "hatchmatch-final-ensemble/v1",
+            "promoted": decision["promoted"],
+            "rejected": decision["rejected"],
+            "decisions": decision["decisions"],
+            "official_public_validation": False,
+            "public_validation": "not_run",
+        },
     )
-    return 2
+    seal_run(run_dir, path, command="final")
+    return 0
 
 
 def run_train_folds(config_path: str | Path, *, execute: bool = False) -> int:
@@ -533,6 +580,42 @@ def run_train_folds(config_path: str | Path, *, execute: bool = False) -> int:
     return 0
 
 
+def write_oof_predictions(
+    config: Mapping[str, Any], base: Path
+) -> dict[str, Any]:
+    """Record checkpoint digests in an out-of-fold manifest.
+
+    This does not invent probability maps or run public validation. Tests may
+    replace it with a writer that stores a tiny fixture.
+    """
+
+    output_name = config.get("output_dir")
+    if not isinstance(output_name, str) or not output_name:
+        raise ValueError("output_dir is required")
+    output = (base / output_name).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    checkpoints: list[dict[str, str]] = []
+    for item in config.get("checkpoints") or []:
+        relative = item.get("path") if isinstance(item, dict) else item
+        if not isinstance(relative, str) or not relative:
+            raise ValueError("checkpoint entries must include a path")
+        file_path = (base / relative).resolve()
+        checkpoints.append(
+            {
+                "path": relative,
+                "sha256": hashlib.sha256(file_path.read_bytes()).hexdigest(),
+            }
+        )
+    manifest = {
+        "schema": "hatchmatch-oof-maps/v1",
+        "checkpoints": checkpoints,
+        "examples": [],
+        "official_public_validation": False,
+    }
+    _write_json(output / "manifest.json", manifest)
+    return manifest
+
+
 def run_predict_oof(config_path: str | Path, *, execute: bool = False) -> int:
     """Require checksummed checkpoints before any out-of-fold maps are written."""
 
@@ -557,11 +640,33 @@ def run_predict_oof(config_path: str | Path, *, execute: bool = False) -> int:
             file=sys.stderr,
         )
         return 2
-    print(
-        "error: out-of-fold prediction was not run; refusing to fabricate maps",
-        file=sys.stderr,
+    output_name = loaded.get("output_dir")
+    if not isinstance(output_name, str) or not output_name:
+        print(
+            "error: output_dir is required; refusing to fabricate metrics",
+            file=sys.stderr,
+        )
+        return 2
+    output = (path.parent / output_name).resolve()
+    try:
+        refuse_completed_overwrite(output)
+        write_oof_predictions(loaded, path.parent)
+    except FileExistsError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    _write_json(
+        output / "metrics.json",
+        {
+            "schema": "hatchmatch-oof-run/v1",
+            "official_public_validation": False,
+            "public_validation": "not_run",
+        },
     )
-    return 2
+    seal_run(output, path, command="predict-oof")
+    return 0
 
 
 def run_calibrate(config_path: str | Path) -> int:
@@ -593,7 +698,6 @@ def run_baseline(config_path: str | Path) -> dict[str, Any]:
         config["threshold"],
         config["max_dimension"],
     )
-    metrics_path.unlink(missing_ok=True)
     subprocess.run(
         [
             sys.executable,
@@ -617,10 +721,10 @@ def run_baseline(config_path: str | Path) -> dict[str, Any]:
     return metrics
 
 
-def _real_document_iou(
+def _real_query_scores(
     records: Sequence[Mapping[str, Any]],
-) -> dict[str, float]:
-    grouped: dict[str, list[float]] = {}
+) -> dict[str, dict[str, float]]:
+    grouped: dict[str, dict[str, float]] = {}
     for record in records:
         if not isinstance(record, Mapping):
             raise ValueError("score records must be mappings")
@@ -632,6 +736,9 @@ def _real_document_iou(
         document_id = record.get("document_id")
         if not isinstance(document_id, str) or not document_id:
             raise ValueError("document_id must be non-empty text")
+        query_id = record.get("query_id")
+        if not isinstance(query_id, str) or not query_id:
+            raise ValueError("query_id must be non-empty text")
         iou = record.get("iou")
         if (
             type(iou) not in (int, float)
@@ -640,13 +747,31 @@ def _real_document_iou(
             or not 0.0 <= float(iou) <= 1.0
         ):
             raise ValueError("iou must be a finite number in [0, 1]")
-        grouped.setdefault(document_id, []).append(float(iou))
+        queries = grouped.setdefault(document_id, {})
+        if query_id in queries:
+            raise ValueError(
+                f"repeated query id {query_id!r} in document {document_id!r}"
+            )
+        queries[query_id] = float(iou)
     if not grouped:
         raise ValueError("real-document out-of-fold scores are required")
+    return grouped
+
+
+def _document_means(
+    scores: Mapping[str, Mapping[str, float]],
+) -> dict[str, float]:
     return {
-        document_id: math.fsum(values) / len(values)
-        for document_id, values in grouped.items()
+        document_id: math.fsum(queries.values()) / len(queries)
+        for document_id, queries in scores.items()
     }
+
+
+def _load_ablation_decision(scores_path: str | Path) -> dict[str, Any]:
+    payload = json.loads(Path(scores_path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("ablation scores must be a mapping")
+    return select_ablations(payload)
 
 
 def _mean_document_iou(scores: Mapping[str, float]) -> float:
