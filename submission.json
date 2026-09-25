@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "repository": "https://github.com/TarunYadgirkar/extra",
+  "commit": "a8bd8d9df4df78de44b96ad0b0609a98040539af",
+  "inference_command": "python solution/infer.py --inputs validation-inputs.json --data-root dataset --output-dir predictions",
+  "environment": "solution/ENVIRONMENT.md",
+  "weights": [
+    {
+      "url": "https://raw.githubusercontent.com/TarunYadgirkar/extra/a8bd8d9df4df78de44b96ad0b0609a98040539af/solution/weights/dino_ft.pt",
+      "sha256": "f9a8ae707c34e265e784648e9748640630acb44e5e0086705a5ac42ee90dc093",
+      "bytes": 28425521
+    },
+    {
+      "url": "https://raw.githubusercontent.com/TarunYadgirkar/extra/a8bd8d9df4df78de44b96ad0b0609a98040539af/solution/weights/head.joblib",
+      "sha256": "0045a2ada1cbcfdf909729fad2b413a11fd9f18262a7b47fed6fe9c4ddfa6af8",
+      "bytes": 3183768
+    }
+  ],
+  "validation_metrics": "solution/submission/metrics.json",
+  "hardware": "Apple M5 Pro (15-core), 24 GB unified memory, PyTorch MPS backend, macOS 27.0; no discrete accelerator. Peak memory measured with /usr/bin/time -l (maximum resident set size) on a 3-query, 1-drawing run including model loading; the 57-query wall time is infer.py's own elapsed counter and excludes about 10 s of process start and model loading. The full run was mostly in macOS low power mode (about 25 s per query before the slowdown; see solution/report/REPORT.md).",
+  "runtime_seconds": 4306,
+  "peak_memory_mb": 4156,
+  "time_spent_hours": 30,
+  "external_resources": [
+    "Pretrained DINOv2 ViT-S/14 reg4 checkpoint: https://huggingface.co/timm/vit_small_patch14_reg4_dinov2.lvd142m (revision c04b5193082a8d5b0c4856c7937384a48136c5de), downloaded by timm on first run; last 4 blocks fine-tuned on the public training split (solution/weights/dino_ft.pt)",
+    "Report, per-document results and disclosure: solution/report/REPORT.md; prediction PNGs for all 57 public validation IDs: solution/submission/predictions-val.zip (SHA-256 in solution/submission/SHA256SUMS)"
+  ],
+  "ai_tools": [
+    "Claude Code (Anthropic, Claude Fable 5.1) wrote and ran the code and experiments under the author's direction"
+  ]
+}
