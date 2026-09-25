@@ -1,0 +1,49 @@
+"""Dev: DINO grids from fine-tuned backbones, layout-compatible with cache/feat_s_{scale}.
+
+extract_ft.py TAG          train images with their held-out fold's backbone, val images with the all-train backbone -> cache/feat_TAG_{0.5,1.0}
+extract_ft.py TAG --all    train and val images with the all-train backbone -> cache/feat_TAGa_{0.5,1.0}
+"""
+import sys, time
+from pathlib import Path
+import numpy as np
+import torch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ft_common import ROOT, W_DIR, load_finetuned, fold_assign, stem  # noqa: E402
+from devdata import examples  # noqa: E402
+from features import load_gray, dense_features  # noqa: E402
+
+SCALES = (0.5, 1.0)
+
+
+def main():
+    tag, allmode = sys.argv[1], "--all" in sys.argv
+    out_tag = tag + ("a" if allmode else "")
+    outs = {s: ROOT / "cache" / f"feat_{out_tag}_{s}" for s in SCALES}
+    for o in outs.values():
+        o.mkdir(parents=True, exist_ok=True)
+    tr, qf = examples("train"), fold_assign()
+    jobs = {}  # weight key -> {image}
+    for e, f in zip(tr, qf):
+        jobs.setdefault("all" if allmode else str(f), set()).add(e["image"])
+    for e in examples("val"):
+        jobs.setdefault("all", set()).add(e["image"])
+    t = time.time(); n = 0
+    for key, imgs in sorted(jobs.items()):
+        todo = [i for i in sorted(imgs) if not all((outs[s] / f"{Path(i).stem[:16]}.npy").exists() for s in SCALES)]
+        if not todo:
+            continue
+        model = load_finetuned(W_DIR / f"{tag}_f{key}.pt")
+        for img in todo:
+            gray = load_gray(ROOT / "dataset" / img)
+            for s in SCALES:
+                f, _ = dense_features(model, gray, s)
+                np.save(outs[s] / f"{Path(img).stem[:16]}.npy", f)
+            n += 1
+            print(key, n, img[:30], f"{time.time()-t:.0f}s", flush=True)
+        del model; torch.mps.empty_cache() if torch.backends.mps.is_available() else None
+    print("extract done", flush=True)
+
+
+if __name__ == "__main__":
+    main()

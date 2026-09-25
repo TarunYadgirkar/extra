@@ -9,7 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import cv as cvmod  # noqa: E402
 from train_head import load as load_rows  # noqa: E402
 
-BASE = "v3"
+import os
+BASE = os.environ.get("TXBASE", "v3")  # DINO-row set to combine with the texture columns
 
 
 def make_loader(txtag, groups):
@@ -58,7 +59,7 @@ def cv_oof(tag, params, rounds, name, folds=4):
 if __name__ == "__main__":
     txtag, groups = sys.argv[1], sys.argv[2].split(",")
     cvmod.load = make_loader(txtag, groups)
-    name = txtag + "_" + sys.argv[2].replace(",", "+") + ("_deep" if "--deep" in sys.argv else "")
+    name = ("" if BASE == "v3" else BASE + "_") + txtag + "_" + sys.argv[2].replace(",", "+") + ("_deep" if "--deep" in sys.argv else "")
     params, rounds = ({}, 400) if "--deep" not in sys.argv else (dict(max_leaf_nodes=127, min_samples_leaf=100), 600)
     c, v, m = cv_oof(txtag, params, rounds, name)
     print(txtag, sys.argv[2], "cv", c, "val", v, flush=True)
