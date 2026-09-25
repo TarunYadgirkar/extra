@@ -1,3 +1,4 @@
+from pathlib import Path
 import numpy as np
 import torch
 import timm
@@ -11,14 +12,25 @@ MODEL_NAMES = {
     "s": "vit_small_patch14_reg4_dinov2.lvd142m",
     "b": "vit_base_patch14_reg4_dinov2.lvd142m",
 }
+# Pretrained checkpoint pinned to an immutable Hub revision for reproducibility.
+HUB_REVISIONS = {"s": "c04b5193082a8d5b0c4856c7937384a48136c5de"}
+# Last 4 blocks + final norm of DINOv2-S, fine-tuned on the train split with a query-conditioned objective (exp/ft, tag ft1).
+FT_WEIGHTS = {"s": Path(__file__).parent / "weights" / "dino_ft.pt"}
 
 
 def device():
     return torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
 
 
-def load_model(size="s"):
-    m = timm.create_model(MODEL_NAMES[size], pretrained=True, dynamic_img_size=True, num_classes=0)
+def load_model(size="s", finetuned=True):
+    kw = {}
+    if size in HUB_REVISIONS:
+        kw["pretrained_cfg_overlay"] = {"hf_hub_id": f"timm/{MODEL_NAMES[size]}@{HUB_REVISIONS[size]}"}
+    m = timm.create_model(MODEL_NAMES[size], pretrained=True, dynamic_img_size=True, num_classes=0, **kw)
+    if finetuned and size in FT_WEIGHTS:
+        state = torch.load(FT_WEIGHTS[size], map_location="cpu")["state"]
+        res = m.load_state_dict(state, strict=False)
+        assert not list(res.unexpected_keys), res.unexpected_keys
     return m.eval().to(device())
 
 

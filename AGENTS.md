@@ -6,12 +6,12 @@ This file is the starting point for any agent continuing work here. The upstream
 
 The input is a construction drawing (grayscale PNG, about 7200x4800) plus a query box drawn around one hatch pattern. The output is a binary mask, at native resolution, of every region in the drawing that has the same pattern. Scoring is done by `evaluate.py`. It computes IoU only on the labeled "known" pixels, averages that per document, then averages across documents (document-macro). The upstream reference scored 73.7% on a different suite, and the upstream target is 75%+.
 
-## Current state (2026-09-23)
+## Current state (2026-09-25)
 
-The official val document-macro IoU is **0.9241**, with recall 0.981 and precision 0.710 over 57 queries in 13 documents. The code lives on branch `claude/dino-head`, pushed to remote `mine` (github.com/TarunYadgirkar/extra). The remote `origin` is upstream TruTec-AI. Inference takes about 22 s per query on an M5 Pro (MPS).
+The official val document-macro IoU is **0.9420**, with recall 0.970 and precision 0.799 over 57 queries in 13 documents (previous deployed version: 0.9241). The code lives on branch `claude/dino-head`, pushed to remote `mine` (github.com/TarunYadgirkar/extra). The remote `origin` is upstream TruTec-AI. Inference takes about 20 to 25 s per query on an M5 Pro (MPS), peak RSS 4.4 GB.
 
 The pipeline is `solution/infer.py`:
-1. `features.py`: frozen DINOv2 ViT-S/14 reg4 patch features (timm), tiled, at 0.5x and 1.0x scale.
+1. `features.py`: DINOv2 ViT-S/14 reg4 patch features (timm, Hub revision pinned), tiled, at 0.5x and 1.0x scale. The last 4 transformer blocks and the final norm are fine-tuned (`weights/dino_ft.pt`, 28 MB; see `exp/ft`), the rest is the pretrained checkpoint.
 2. `pixfeat.py`: per-location features on a 4 px grid. These are cosine, robust and top-k similarity to the query cells, exemplar-LDA (whitened against the image's own feature statistics), tone and ink maps, and orientation and intensity histograms, each compared against the query.
 3. `texfeat.py`: query-conditioned texture columns. These are a log-polar power spectrum (line spacing x angle), ink-blob size-class densities, and normalized cross-correlation (NCC) of query crops.
 4. A sklearn HistGradientBoosting head (`weights/head.joblib`, 162 columns: the 112 v3 columns followed by the texture groups `s0_,s1_,qs,b6,b16,qb,ncc,q_`).
@@ -28,19 +28,27 @@ python solution/infer.py --inputs validation-inputs.json --data-root dataset --o
 python evaluate.py --manifest dataset/val.json --data-root dataset --predictions predictions --output metrics.json
 ```
 
-## Rebuilding the head from scratch
+## Rebuilding the weights from scratch
 
-`cache/` is gitignored. What it keeps is `cache/feat_s_{0.5,1.0}` (the DINOv2-S grids for every train and val image, about 12 GB) and `cache/domains` (label pixels per example). Everything else was deleted and has to be rebuilt:
+`cache/` is gitignored. `cache/feat_s_{0.5,1.0}` holds the frozen DINOv2-S grids (about 12 GB, used by the baseline rows and by `cache_feats.py`), `cache/domains` the label pixels per example. The deployed head is trained on rows extracted with per-fold fine-tuned backbones (cross-fitting), and inference uses the backbone fine-tuned on all of train:
 
 ```bash
-python solution/cache_feats.py train s 0.5   # repeat for val, and for scale 1.0 (skips existing)
-python solution/devdata.py                   # label domains (skips existing)
+python solution/devdata.py                                   # label domains (skips existing)
+python solution/cache_feats.py train s 0.5                   # frozen grids, repeat for val and scale 1.0 (only needed for the baseline rows)
 python solution/build_rows.py val v3 && python solution/build_rows.py train v3 && python solution/build_rows.py train v3 uniform
 OMP_NUM_THREADS=4 python solution/exp/texture/build_tx.py val tx_v2 --extra
 OMP_NUM_THREADS=4 python solution/exp/texture/build_tx.py train tx_v2 --extra
-OMP_NUM_THREADS=4 python solution/exp/texture/cv_tx.py tx_v2 "s0_,s1_,qs,b6,b16,qb,ncc,q_" --save
-cp "cache/head_tx_v2_s0_+s1_+qs+b6+b16+qb+ncc+q_.joblib" solution/weights/head.joblib
+python solution/exp/ft/prep_ft.py                            # raw gray images + cell label grids for the fine-tune
+for f in 0 1 2 3 all; do python solution/exp/ft/train_ft.py ft1 $f steps=800 lr=1e-5; done   # about 12 to 20 min each on MPS
+python solution/exp/ft/extract_ft.py ft1                     # train images by their held-out fold's backbone, val by the all-train one
+export GRIDS=feat_ft1_0.5:28,feat_ft1_1.0:14
+python solution/exp/backbone/build_rows_bb.py val ft1 && python solution/exp/backbone/build_rows_bb.py train ft1 && python solution/exp/backbone/build_rows_bb.py train ft1 uniform
+TXBASE=ft1 OMP_NUM_THREADS=4 python solution/exp/texture/cv_tx.py tx_v2 "s0_,s1_,qs,b6,b16,qb,ncc,q_" --save
+cp "cache/head_ft1_tx_v2_s0_+s1_+qs+b6+b16+qb+ncc+q_.joblib" solution/weights/head.joblib
+cp cache/ft_w/ft1_fall.pt solution/weights/dino_ft.pt
 ```
+
+The v3 rows are only needed for the baseline comparison (`exp/ft/compare.py`). `cache/logs/*.sh` in the working tree are the exact chains that produced the deployed weights.
 
 `solution/exp/texture/txfeat.py` and `solution/texfeat.py` contain the same code. If you change one, change the other, or better, make the exp copy import from `solution/`.
 
@@ -53,7 +61,7 @@ cp "cache/head_tx_v2_s0_+s1_+qs+b6+b16+qb+ncc+q_.joblib" solution/weights/head.j
 
 ## What is known
 
-- **Worked:** the texture columns (+0.06 cv, the largest gain) and blur plus hole-fill (+0.022 cv, +0.009 val).
+- **Worked:** the texture columns (+0.06 cv, the largest gain), blur plus hole-fill (+0.022 cv, +0.009 val), and fine-tuning the last DINO blocks with cross-fitted rows (+0.013 cv on three independent measurements, CI touching zero; +0.018 official val).
 - **Did not work (measured, see EXPERIMENTS.md):**
   - ViT-B, DINOv3-S, or combined backbones
   - a neural spatial head, or stacking one on top
@@ -67,7 +75,7 @@ cp "cache/head_tx_v2_s0_+s1_+qs+b6+b16+qb+ncc+q_.joblib" solution/weights/head.j
 
 ## Open ideas not yet tried
 
-- Fine-tuning the last DINO blocks with a query-conditioned objective (only frozen features were used so far).
+- Fine-tuning variants: the adopted ft1 hurts queries under 40 px (one or two cells), so a size-aware fallback or a prototype built from a dilated query box might recover them; more blocks, a longer schedule, or a second seed averaged at the grid level were not tried.
 - Label-noise-aware training, e.g. downweighting train queries whose positives are tone-only fills.
 - Cheaper inference: `predict_proba` on about 2M grid points per query dominates the runtime. Skipping blank paper or using coarse-to-fine evaluation would help.
 - Cross-query competition among queries on the same drawing gave +0.005 cv and +0.003 val. It was not adopted because it makes each output depend on the batch.
@@ -81,11 +89,6 @@ cp "cache/head_tx_v2_s0_+s1_+qs+b6+b16+qb+ncc+q_.joblib" solution/weights/head.j
 
 ## Ongoing (2026-09-25)
 
-Fine-tuning DINO (exp/ft) is the first open idea tried; see the ft1* rows and the last observation bullet in `solution/EXPERIMENTS.md`. Summary so far:
-- Cross-fitted design (ft1): last 4 blocks fine-tuned per cv fold with a query-conditioned similarity loss; fold backbones produce the head's training rows, the all-train backbone produces the grids at inference. cv +0.012 (seed 1: +0.014, seed noise +0.0025), CI touching zero; official val 0.9420 / 0.9380 (seeds 0/1) vs 0.9241, with doc 796851 up 0.15 to 0.21 and e86e6e down 0.06. Queries under 40 px lose, everything larger gains.
-- Strict nested cv (head on same-backbone rows) is +0.0007, so the cv gain depends on training the head on out-of-fold backbone tokens. The deployable analogue of that (ft1a) gets official val 0.9362.
-- Fully nested cv (12 inner backbones, `cache/logs/ft1_nested_chain.sh`) reproduces the gain: 0.9030, +0.0132 [-0.0069,+0.0339], 21 docs better 9 worse. Nothing in flight.
-- **Decision pending (Tarun's call):** three independent cv measurements agree at +0.013 and val is +0.012 to +0.018 on three runs, but no CI excludes zero because three documents lose 0.15 to 0.33 (mostly queries under 40 px). To adopt: copy `cache/ft_w/ft1_fall.pt` (about 30 MB, last 4 blocks + norm) to `solution/weights/dino_ft.pt`, load it in `features.load_model` the way `exp/ft/ft_common.load_finetuned` does, install `cache/head_ft1_tx_v2_s0_+s1_+qs+b6+b16+qb+ncc+q_.joblib` as `solution/weights/head.joblib`, then confirm 0.9420 end to end with `infer.py` + `evaluate.py` (val_cached_ft.py already reproduced it from cached grids). The rebuild recipe becomes: prep_ft.py, train_ft.py ft1 {0,1,2,3,all}, extract_ft.py ft1, build_rows_bb.py with GRIDS=feat_ft1_*, TXBASE=ft1 cv_tx.py --save.
-- If not adopted, the next open idea is label-noise-aware training; a cheap first cut is to downweight train queries whose positives are tone-only fills (see the `exp/evidence` rows for how to find them).
-- Not adopted, nothing changed in `solution/infer.py` or `solution/weights/`. Nothing has been submitted.
-- Rebuilt caches this session: rows v3 / tx_v2 (baseline cv reproduces 0.8899 exactly), feat_ft1*, ft_gray, ft_lab, ft_w. `cache/logs/*.sh` are the chain scripts used.
+The DINO fine-tune (exp/ft, tag ft1) is **adopted**: `solution/weights/dino_ft.pt` and the ft1 head are deployed, `features.load_model` loads them, official val is 0.9420 end to end. The evidence and the caveat (no cv CI excludes zero because three documents lose 0.15 to 0.33, mostly tiny queries) are in the ft1* rows and the last observation bullet of `solution/EXPERIMENTS.md`. `solution/report/REPORT.md`, `solution/ENVIRONMENT.md`, `solution/submission/` and `submission.json` are the submission package. Nothing has been sent to TruTec yet; that is Tarun's call.
+
+Nothing is in flight. Next ideas are in "Open ideas" above.

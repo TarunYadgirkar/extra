@@ -9,7 +9,7 @@ from devdata import examples, domain, ROOT
 split, size, scale = sys.argv[1], sys.argv[2], float(sys.argv[3])
 out = ROOT / "cache" / f"feat_{size}_{scale}"
 out.mkdir(parents=True, exist_ok=True)
-model = load_model(size)
+model = load_model(size, finetuned=False)  # frozen grids: the fine-tuned ones come from exp/ft/extract_ft.py
 by_img = {}
 for e in examples(split):
     by_img.setdefault(e["image"], []).append(e)
