@@ -2,6 +2,8 @@
 
 extract_ft.py TAG          train images with their held-out fold's backbone, val images with the all-train backbone -> cache/feat_TAG_{0.5,1.0}
 extract_ft.py TAG --all    train and val images with the all-train backbone -> cache/feat_TAGa_{0.5,1.0}
+extract_ft.py TAG --strict K   train images NOT in fold K with fold K's backbone -> cache/feat_TAGsK_{0.5,1.0}; fold-K images are
+                               symlinked from cache/feat_TAG_* (held-out extraction) so row builders find every image
 """
 import sys, time
 from pathlib import Path
@@ -18,16 +20,26 @@ SCALES = (0.5, 1.0)
 
 def main():
     tag, allmode = sys.argv[1], "--all" in sys.argv
-    out_tag = tag + ("a" if allmode else "")
+    strict = int(sys.argv[sys.argv.index("--strict") + 1]) if "--strict" in sys.argv else None
+    out_tag = tag + ("a" if allmode else f"s{strict}" if strict is not None else "")
     outs = {s: ROOT / "cache" / f"feat_{out_tag}_{s}" for s in SCALES}
     for o in outs.values():
         o.mkdir(parents=True, exist_ok=True)
     tr, qf = examples("train"), fold_assign()
     jobs = {}  # weight key -> {image}
     for e, f in zip(tr, qf):
+        if strict is not None:
+            if f == strict:
+                for s in SCALES:
+                    dst = outs[s] / f"{Path(e['image']).stem[:16]}.npy"
+                    dst.exists() or dst.symlink_to(ROOT / "cache" / f"feat_{tag}_{s}" / dst.name)
+            else:
+                jobs.setdefault(str(strict), set()).add(e["image"])
+            continue
         jobs.setdefault("all" if allmode else str(f), set()).add(e["image"])
-    for e in examples("val"):
-        jobs.setdefault("all", set()).add(e["image"])
+    if strict is None:
+        for e in examples("val"):
+            jobs.setdefault("all", set()).add(e["image"])
     t = time.time(); n = 0
     for key, imgs in sorted(jobs.items()):
         todo = [i for i in sorted(imgs) if not all((outs[s] / f"{Path(i).stem[:16]}.npy").exists() for s in SCALES)]
