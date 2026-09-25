@@ -41,4 +41,4 @@ for k in range(4):
     best = max(C, key=lambda n: dm("train", n, inner)[0])
     print("fold", k, "picks", best)
     per_doc.update(dm("train", best, [i for i in fold if fold[i] == k])[1])
-print("nested cv", round(np.mean(list(per_doc.values())), 4), fmt(boot(base, per_doc)))
+print("cross-fitted selection cv (not strict nested CV)", round(np.mean(list(per_doc.values())), 4), fmt(boot(base, per_doc)))

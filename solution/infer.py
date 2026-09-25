@@ -6,6 +6,8 @@ import joblib
 import numpy as np
 from PIL import Image
 from scipy import ndimage
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.utils._openmp_helpers import _openmp_effective_n_threads
 sys.path.insert(0, str(Path(__file__).parent))
 from features import load_model, load_gray, dense_features
 from pixfeat import DOWN, ImageContext, features_at
@@ -15,6 +17,32 @@ HERE = Path(__file__).parent
 SCALES = (0.5, 1.0)
 INPUT_KEYS = {"id", "image", "width", "height", "query_box", "context_boxes"}
 TEX_GROUPS = ("s0_", "s1_", "qs", "b6", "b16", "qb", "ncc", "q_")
+
+
+def predict_probabilities(head, features):
+    if not isinstance(head, HistGradientBoostingClassifier):
+        return head.predict_proba(features)[:, 1]
+    # Use sklearn's fitted bins and native tree evaluator; requires the pinned sklearn version.
+    values = head._preprocess_X(features, reset=False)
+    binned = head._bin_mapper.transform(values)
+    raw = np.zeros((len(values), head.n_trees_per_iteration_),
+                   dtype=head._baseline_prediction.dtype, order="F")
+    raw += head._baseline_prediction
+    head._predict_iterations(binned, head._predictors, raw, True, _openmp_effective_n_threads())
+    return head._loss.predict_proba(raw)[:, 1]
+
+
+def postprocess(prob, shape, threshold):
+    h, w = shape
+    gh, gw = prob.shape
+    # Labels cover whole regions, including enclosed text and symbols.
+    g = cv2.GaussianBlur(prob, (0, 0), 14 / DOWN)
+    lab, n = ndimage.label(g <= threshold)
+    fill = np.ones(n + 1, bool); fill[0] = False
+    fill[np.unique(np.r_[lab[0], lab[-1], lab[:, 0], lab[:, -1]])] = False
+    g = np.where(fill[lab], threshold + 0.01, g)
+    full = cv2.resize(g, (gw * DOWN, gh * DOWN), interpolation=cv2.INTER_LINEAR)[:h, :w]
+    return full > threshold
 
 
 def predict_mask(head, ctx, tctx, box, threshold, chunk=400_000):
@@ -31,15 +59,8 @@ def predict_mask(head, ctx, tctx, box, threshold, chunk=400_000):
         t, names = tex_features_at(tctx, qc, ys[i:i + chunk], xs[i:i + chunk])
         if keep is None:
             keep = [j for j, n in enumerate(names) if n.startswith(TEX_GROUPS)]
-        prob[i:i + chunk] = head.predict_proba(np.concatenate([f, t[:, keep]], 1))[:, 1]
-    # labels cover whole regions: smooth, then claim enclosed holes (text, symbols) inside accepted regions
-    g = cv2.GaussianBlur(prob.reshape(gh, gw), (0, 0), 14 / DOWN)
-    lab, n = ndimage.label(g <= threshold)
-    fill = np.ones(n + 1, bool); fill[0] = False
-    fill[np.unique(np.r_[lab[0], lab[-1], lab[:, 0], lab[:, -1]])] = False
-    g = np.where(fill[lab], threshold + 0.01, g)
-    full = cv2.resize(g, (gw * DOWN, gh * DOWN), interpolation=cv2.INTER_LINEAR)[:h, :w]
-    return full > threshold
+        prob[i:i + chunk] = predict_probabilities(head, np.concatenate([f, t[:, keep]], 1))
+    return postprocess(prob.reshape(gh, gw), (h, w), threshold)
 
 
 def main():

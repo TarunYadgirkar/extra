@@ -64,7 +64,7 @@ for k in range(4):
     print("fold", k, "picks", best, flush=True)
     per_doc.update(dm("train", best, outer)[1])
 base = dm("train", "none", list(fold))[1]
-print("nested cv", round(np.mean(list(per_doc.values())), 4), "vs base", round(np.mean(list(base.values())), 4), fmt(boot(base, per_doc)))
+print("cross-fitted selection cv (not strict nested CV)", round(np.mean(list(per_doc.values())), 4), "vs base", round(np.mean(list(base.values())), 4), fmt(boot(base, per_doc)))
 if va:
     pick = max(C, key=lambda n: full[n])
     print("val pick", pick, round(va[pick], 4), "base", round(va["none"], 4),

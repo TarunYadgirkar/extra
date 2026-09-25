@@ -46,7 +46,7 @@ cp "cache/head_tx_v2_s0_+s1_+qs+b6+b16+qb+ncc+q_.joblib" solution/weights/head.j
 
 ## Evaluation protocol (use it, don't invent a new one)
 
-- **cv** comes from `solution/cv.py` (and `exp/texture/cv_tx.py` or `exp/head/hcv.py`, which also save out-of-fold predictions). It runs 4 folds grouped by document over the 62 train real documents. Fold assignment: sort the documents, shuffle them with `np.random.default_rng(0)`, then assign fold `i % 4`. Each held-out real query is scored on a uniform 20k-pixel sample.
+- **cv** comes from `solution/cv.py` (and `exp/texture/cv_tx.py` or `exp/head/hcv.py`, which also save out-of-fold predictions). It assigns all 126 training documents (62 real, 64 generated CAD) to four folds: sort document IDs, shuffle with `np.random.default_rng(0)`, assign `i % 4`. Each model excludes every real and CAD query in its held-out fold. Scoring includes only real queries, using up to 20,000 uniformly sampled known pixels per query and document-macro IoU. Real-document counts per fold are 22, 15, 7 and 18.
 - **val**: 13 documents. It is noisy; one document moves the score by about 3 points.
 - A change counts only if cv improves under a paired per-document bootstrap (`exp/backbone/cv_oof.py --compare`, `exp/head/hcv.py`) and val does not drop. Seed noise alone is about 0.003 cv.
 - Confirm the final number end to end with `infer.py` + `evaluate.py`. `exp/calib/val_pp.py` reproduces the val score from cached grids without a GPU.
