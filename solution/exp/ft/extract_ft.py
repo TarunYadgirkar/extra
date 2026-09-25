@@ -4,6 +4,8 @@ extract_ft.py TAG          train images with their held-out fold's backbone, val
 extract_ft.py TAG --all    train and val images with the all-train backbone -> cache/feat_TAGa_{0.5,1.0}
 extract_ft.py TAG --strict K   train images NOT in fold K with fold K's backbone -> cache/feat_TAGsK_{0.5,1.0}; fold-K images are
                                symlinked from cache/feat_TAG_* (held-out extraction) so row builders find every image
+extract_ft.py TAG --nested K   fold-j images (j != K) with backbone TAGnK_fj (trained without folds K and j) -> cache/feat_TAGnK_*;
+                               fold-K images symlinked from cache/feat_TAG_* (backbone K, held-out extraction)
 """
 import sys, time
 from pathlib import Path
@@ -21,7 +23,11 @@ SCALES = (0.5, 1.0)
 def main():
     tag, allmode = sys.argv[1], "--all" in sys.argv
     strict = int(sys.argv[sys.argv.index("--strict") + 1]) if "--strict" in sys.argv else None
-    out_tag = tag + ("a" if allmode else f"s{strict}" if strict is not None else "")
+    nested = int(sys.argv[sys.argv.index("--nested") + 1]) if "--nested" in sys.argv else None
+    out_tag = tag + ("a" if allmode else f"s{strict}" if strict is not None else f"n{nested}" if nested is not None else "")
+    wtag = tag if nested is None else f"{tag}n{nested}"
+    if nested is not None:
+        strict = nested
     outs = {s: ROOT / "cache" / f"feat_{out_tag}_{s}" for s in SCALES}
     for o in outs.values():
         o.mkdir(parents=True, exist_ok=True)
@@ -34,7 +40,7 @@ def main():
                     dst = outs[s] / f"{Path(e['image']).stem[:16]}.npy"
                     dst.exists() or dst.symlink_to(ROOT / "cache" / f"feat_{tag}_{s}" / dst.name)
             else:
-                jobs.setdefault(str(strict), set()).add(e["image"])
+                jobs.setdefault(str(f) if nested is not None else str(strict), set()).add(e["image"])
             continue
         jobs.setdefault("all" if allmode else str(f), set()).add(e["image"])
     if strict is None:
@@ -45,7 +51,7 @@ def main():
         todo = [i for i in sorted(imgs) if not all((outs[s] / f"{Path(i).stem[:16]}.npy").exists() for s in SCALES)]
         if not todo:
             continue
-        model = load_finetuned(W_DIR / f"{tag}_f{key}.pt")
+        model = load_finetuned(W_DIR / f"{wtag}_f{key}.pt")
         for img in todo:
             gray = load_gray(ROOT / "dataset" / img)
             for s in SCALES:

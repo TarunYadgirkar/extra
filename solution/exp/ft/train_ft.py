@@ -15,7 +15,7 @@ from ft_common import (HERE, GRAY_DIR, LAB_DIR, W_DIR, P, TILE_P, Backbone, devi
 from devdata import examples  # noqa: E402
 
 DEFAULT = dict(steps=1500, bs=6, lr=2e-5, wd=0.0, nblk=4, real_w=0.5, seed=0, p05=0.5, qtile=21, l2init=0.0,
-               eval_every=250, warm=0.05, robust=1)
+               eval_every=250, warm=0.05, robust=1, excl=-1)
 NQMAX = 400
 
 
@@ -232,7 +232,7 @@ def main():
         exs, held = tr, None
     else:
         qf = fold_assign()
-        exs = [e for e, f in zip(tr, qf) if f != int(fold)]
+        exs = [e for e, f in zip(tr, qf) if f != int(fold) and f != cfg["excl"]]
         held = [e for e, f in zip(tr, qf) if f == int(fold) and e["kind"] == "real"]
     W_DIR.mkdir(parents=True, exist_ok=True)
     log = open(HERE / "logs" / f"{tag}_f{fold}.log", "w")

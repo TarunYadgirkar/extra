@@ -1,5 +1,6 @@
 """Strict nested cv for fine-tuned backbones: fold k's head trains on rows extracted with fold k's backbone
-(rows_train_{TAG}s{k}) and is scored on the held-out fold of rows_train_u_{TAG}. Usage: cv_strict.py TAG"""
+(rows_train_{TAG}s{k}) and is scored on the held-out fold of rows_train_u_{TAG}.
+Usage: cv_strict.py TAG [ROWFMT SUFFIX]   e.g. cv_strict.py ft1 "ft1n{k}" nested  (rows from nested inner backbones)"""
 import sys
 from pathlib import Path
 import numpy as np
@@ -13,13 +14,15 @@ from ft_common import fold_assign  # noqa: E402
 
 G = "s0_,s1_,qs,b6,b16,qb,ncc,q_"
 tag = sys.argv[1]
+rowfmt = sys.argv[2] if len(sys.argv) > 2 else tag + "s{k}"
+suffix = sys.argv[3] if len(sys.argv) > 3 else "strict"
 exs = examples("train"); kinds = [e["kind"] for e in exs]
 qfold = fold_assign()
 cv_tx.BASE = tag
 Xu, Yu, Qu, _ = make_loader("tx_v2", G.split(","))("train_u", None)
 prob = np.zeros(len(Yu), np.float32)
 for k in range(4):
-    cv_tx.BASE = f"{tag}s{k}"
+    cv_tx.BASE = rowfmt.format(k=k)
     X, Y, Q, _ = make_loader("tx_v2", G.split(","))("train", None)
     tr = qfold[Q] != k
     m = cvmod.fit(X[tr], Y[tr], Q[tr], kinds)
@@ -27,5 +30,5 @@ for k in range(4):
     prob[te] = m.predict_proba(Xu[te])[:, 1]
     del X
     print("fold", k, "done", flush=True)
-np.save(ROOT / "cache" / f"tx_oof_{tag}strict_tx_v2_{G.replace(',', '+')}.npy", prob)
-print(tag, "strict cv", np.round([cvmod.doc_macro(prob, Yu, Qu, exs, t) for t in cvmod.THS], 4), flush=True)
+np.save(ROOT / "cache" / f"tx_oof_{tag}{suffix}_tx_v2_{G.replace(',', '+')}.npy", prob)
+print(tag, suffix, "cv", np.round([cvmod.doc_macro(prob, Yu, Qu, exs, t) for t in cvmod.THS], 4), flush=True)

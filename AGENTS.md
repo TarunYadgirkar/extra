@@ -79,6 +79,11 @@ cp "cache/head_tx_v2_s0_+s1_+qs+b6+b16+qb+ncc+q_.joblib" solution/weights/head.j
 - The user's Mac is shared. Run at most two heavy jobs at once, under `nice -n 15` with `OMP_NUM_THREADS=4`.
 - Don't submit to TruTec (ryan@trutec.ai) without the user's go-ahead.
 
-## Ongoing
+## Ongoing (2026-09-25)
 
-Nothing is in flight; the loop stopped on a plateau at 0.9241. The next agent should pick from "Open ideas" above.
+Fine-tuning DINO (exp/ft) is the first open idea tried; see the ft1* rows and the last observation bullet in `solution/EXPERIMENTS.md`. Summary so far:
+- Cross-fitted design (ft1): last 4 blocks fine-tuned per cv fold with a query-conditioned similarity loss; fold backbones produce the head's training rows, the all-train backbone produces the grids at inference. cv +0.012 (seed 1: +0.014, seed noise +0.0025), CI touching zero; official val 0.9420 / 0.9380 (seeds 0/1) vs 0.9241, with doc 796851 up 0.15 to 0.21 and e86e6e down 0.06. Queries under 40 px lose, everything larger gains.
+- Strict nested cv (head on same-backbone rows) is +0.0007, so the cv gain depends on training the head on out-of-fold backbone tokens. The deployable analogue of that (ft1a) gets official val 0.9362.
+- In flight: fully nested cv of the cross-fitted design (`cache/logs/ft1_nested_chain.sh`, log `cache/logs/ft1_nested_chain.log`, 12 inner backbones `cache/ft_w/ft1n{k}_f{j}.pt`, then `cv_strict.py ft1 "ft1n{k}" nested` and `compare.py`). It prints `FT1_NESTED_DONE` when finished. If its cv gain holds with a CI above zero, ft1 is adoptable: ship `cache/ft_w/ft1_fall.pt` (about 30 MB, last 4 blocks + norm) under `solution/weights/`, load it in `features.load_model` (see `exp/ft/ft_common.load_finetuned`), and use `cache/head_ft1_tx_v2_s0_+s1_+qs+b6+b16+qb+ncc+q_.joblib` as the head. If it does not hold, log it and move to the next open idea (label-noise-aware training).
+- Not adopted, nothing changed in `solution/infer.py` or `solution/weights/`. Nothing has been submitted.
+- Rebuilt caches this session: rows v3 / tx_v2 (baseline cv reproduces 0.8899 exactly), feat_ft1*, ft_gray, ft_lab, ft_w. `cache/logs/*.sh` are the chain scripts used.
