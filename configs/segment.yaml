@@ -1,0 +1,4 @@
+schema: hatchmatch-segment/v1
+max_side: 2000
+tone_threshold: 0.7
+alpha: 0.75

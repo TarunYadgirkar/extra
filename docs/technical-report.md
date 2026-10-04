@@ -78,6 +78,17 @@ That metrics file has no `provenance.json` seal. The builder therefore
 refuses to package it until the bytes are sealed without editing them. No
 second public-validation document-macro IoU is claimed.
 
+A separate classical segmenter is `scripts/segment_predict.py` with
+`configs/segment.yaml`. Flat gray fills use the local median. Other patterns
+use multi-scale Gabor energy, with the prototype taken from pattern pixels
+inside the query so a symbol in the box does not define the match. The
+threshold constants were chosen on real training queries only. This report
+does not yet include a public-validation score for that command:
+
+```bash
+python scripts/segment_predict.py --inputs validation-inputs.json --data-root dataset --output-dir predictions --config configs/segment.yaml
+```
+
 The neural ensemble has not been trained or scored here.
 
 There is no sealed `runs/final`, no `best.pt` ensemble, and no GPU run.

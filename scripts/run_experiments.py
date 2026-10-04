@@ -262,9 +262,17 @@ def refuse_completed_overwrite(run_dir: str | Path) -> None:
 
 
 def seal_run(
-    run_dir: str | Path, config_path: str | Path, *, command: str
+    run_dir: str | Path,
+    config_path: str | Path,
+    *,
+    command: str,
+    official: bool | None = None,
 ) -> dict[str, Any]:
-    """Hash an existing metrics file into provenance without rewriting it."""
+    """Hash an existing metrics file into provenance without rewriting it.
+
+    ``official`` defaults to true only for the capped classical baseline command.
+    Pass true after ``challenge/evaluate.py`` has written the metrics file.
+    """
 
     root = Path(run_dir)
     source = Path(config_path).resolve()
@@ -294,7 +302,9 @@ def seal_run(
             "config.json": _file_record(root / "config.json"),
             "metrics.json": _file_record(metrics_path),
         },
-        "official_public_validation": command == "baseline",
+        "official_public_validation": (
+            command == "baseline" if official is None else official
+        ),
     }
     _write_json(root / "provenance.json", provenance)
     return provenance
