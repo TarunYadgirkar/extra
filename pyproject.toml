@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hatch-matching"
+version = "0.1.0"
+description = "Reproducible query-conditioned hatch segmentation"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "albumentations==2.0.8",
+    "numpy==2.5.3",
+    "opencv-python-headless==5.0.0.93",
+    "optuna==5.0.0",
+    "pillow==12.3.0",
+    "pyyaml==6.0.3",
+    "scikit-image==0.26.0",
+    "scikit-learn==1.9.1",
+    "torch==2.14.0",
+    "transformers==5.17.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1"]
+
+[project.scripts]
+hatch-train = "hatchmatch.train:main"
+hatch-calibrate = "hatchmatch.calibrate:main"
+hatch-infer = "inference:main"
+
+[tool.setuptools]
+py-modules = ["inference"]
+
+[tool.setuptools.packages.find]
+include = ["hatchmatch*", "scripts*"]
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers"]
+testpaths = ["tests"]

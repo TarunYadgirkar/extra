@@ -1,0 +1,8 @@
+challenge_dir: ../challenge
+challenge_revision: 65b98e480f2a10b82f974f4feb519ee4e012d66c
+inputs: ../validation-inputs.json
+evaluation_manifest: ../dataset/val.json
+data_root: ../dataset
+run_dir: ../runs/baseline
+threshold: 0.5
+max_dimension: null

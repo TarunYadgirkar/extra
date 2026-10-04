@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "repository": "https://github.com/TarunYadgirkar/extra",
+  "commit": "530fcda1b116a8f011587cf8d7a4c30ce1ee68b1",
+  "inference_command": "python inference.py --inputs validation-inputs.json --data-root dataset --output-dir predictions --config configs/final.yaml",
+  "environment": "pyproject.toml",
+  "weights": [],
+  "validation_metrics": "metrics.json",
+  "hardware": "CPU only; no GPU was available. This example is schema metadata, not a sealed runs/final ensemble submission.",
+  "runtime_seconds": 0,
+  "peak_memory_mb": null,
+  "time_spent_hours": 0,
+  "external_resources": [
+    "Dataset release 1.0 https://github.com/TruTec-AI/hatch-matching-challenge/releases/download/dataset-v1/trutec-hatch-dataset-v1.zip sha256 d5c1c845898669fe3941c363db3f328ed9d50c828acf7daeed7c9b2ae74b2229",
+    "Evaluator revision 65b98e480f2a10b82f974f4feb519ee4e012d66c",
+    "Historical reference: 73.73% document-macro IoU on a different 37-query suite. That figure is not this challenge score.",
+    "runtime_seconds and time_spent_hours are 0 because wall-clock timing was not recorded. They are not measurements. peak_memory_mb is null."
+  ],
+  "ai_tools": [
+    "An automated coding agent assisted implementation. It did not train or score the neural ensemble."
+  ]
+}
