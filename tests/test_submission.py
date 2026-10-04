@@ -357,10 +357,9 @@ def test_technical_report_separates_historical_reference_from_measured_score() -
         "The 73.73% figure is a historical reference on a different 37-query "
         "suite. It is not a score on this challenge's public-validation split."
     ) in report
-    assert (
-        "The only measured challenge score is the capped-1600 classical "
-        "baseline document-macro IoU 0.4779169321."
-    ) in report
+    assert "capped-1600 classical baseline document-macro IoU is 0.4779169321." in report
+    assert "0.6283198947626735" in report
+    assert "4b5fcf5a96ac2686209171cd86ec2ba3d94e130b62784ec1e325d4da885cec5b" in report
     assert "0.4779169321376195" in report
     assert "The neural ensemble has not been trained or scored here." in report
     assert (

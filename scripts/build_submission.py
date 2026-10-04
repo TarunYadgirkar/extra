@@ -51,8 +51,8 @@ TIMING_DEFINITION = (
     "and initialization."
 )
 DEFAULT_INFERENCE_COMMAND = (
-    "python inference.py --inputs validation-inputs.json "
-    "--data-root dataset --output-dir predictions --config configs/final.yaml"
+    "python scripts/segment_predict.py --inputs validation-inputs.json "
+    "--data-root dataset --output-dir predictions --config configs/segment.yaml"
 )
 ROOT = Path(__file__).resolve().parents[1]
 OFFICIAL_FIELDS = (

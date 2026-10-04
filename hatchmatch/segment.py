@@ -70,22 +70,31 @@ def pattern_score(
     if type(max_side) is not int or max_side < 64:
         raise ValueError("max_side must be an integer of at least 64")
 
-    working, scale_x, scale_y = _resize_max(gray, max_side)
-    query = _scale_box(query_box, scale_x, scale_y, working.shape[1], working.shape[0])
-    crop = working[query[1] : query[3], query[0] : query[2]]
+    native_query = (query_box.x0, query_box.y0, query_box.x1, query_box.y1)
+    crop = gray[query_box.y0 : query_box.y1, query_box.x0 : query_box.x1]
     mode, fraction = _gray_mode(crop)
     if mode <= TONE_MODE_MAX and fraction >= TONE_FRACTION_MIN:
-        score = _tone_score(working, mode, min(crop.shape))
-        selection = np.zeros(working.shape, dtype=bool)
-        selection[query[1] : query[3], query[0] : query[2]] = True
-        branch = "tone"
-    else:
-        selection = _pattern_pixels(working, query)
-        score = _gabor_score(working, selection)
-        branch = "texture"
+        # Keep the native gray level. Downsampling blends black lines into a
+        # flat fill and the fill no longer matches the query mode.
+        score = _tone_score(gray, mode, min(crop.shape))
+        selection = np.zeros(gray.shape, dtype=bool)
+        selection[query_box.y0 : query_box.y1, query_box.x0 : query_box.x1] = True
+        return PatternScore(
+            score=score,
+            branch="tone",
+            selection=selection,
+            query=native_query,
+            native_size=(width, height),
+            working_shape=gray.shape,
+        )
+
+    working, scale_x, scale_y = _resize_max(gray, max_side)
+    query = _scale_box(query_box, scale_x, scale_y, working.shape[1], working.shape[0])
+    selection = _pattern_pixels(working, query)
+    score = _gabor_score(working, selection)
     return PatternScore(
         score=score,
-        branch=branch,
+        branch="texture",
         selection=selection,
         query=query,
         native_size=(width, height),
@@ -177,19 +186,20 @@ def _gray_mode(crop: np.ndarray) -> tuple[int, float]:
 
 
 def _tone_score(gray: np.ndarray, mode: int, query_side: int) -> np.ndarray:
-    height, width = gray.shape
-    reduced = cv2.resize(
-        gray,
-        (max(1, width // 2), max(1, height // 2)),
-        interpolation=cv2.INTER_AREA,
+    band = (
+        np.abs(gray.astype(np.int16) - np.int16(mode)) <= np.int16(8)
+    ).astype(np.uint8)
+    radius = int(np.clip(round(query_side * 0.15), 2, 12))
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
     )
-    kernel = int(np.clip(round(query_side / 2), 3, 31))
-    if kernel % 2 == 0:
-        kernel += 1
-    median = cv2.medianBlur(reduced, kernel)
-    median = cv2.resize(median, (width, height), interpolation=cv2.INTER_LINEAR)
-    distance = np.abs(median.astype(np.float32) - np.float32(mode))
-    return np.exp(-distance / np.float32(10.0)).astype(np.float32, copy=False)
+    closed = cv2.morphologyEx(band, cv2.MORPH_CLOSE, kernel)
+    opened = cv2.morphologyEx(
+        closed,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+    )
+    return opened.astype(np.float32, copy=False)
 
 
 def _pattern_pixels(gray: np.ndarray, query: tuple[int, int, int, int]) -> np.ndarray:

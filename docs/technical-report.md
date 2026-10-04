@@ -52,7 +52,7 @@ That cached reference is 37 real queries across 12 documents
 (`document_macro_iou` 0.7373200409764458 in the challenge reference metrics).
 It is not the public-validation split and it is not the private test.
 
-The only measured challenge score is the capped-1600 classical baseline document-macro IoU 0.4779169321.
+The capped-1600 classical baseline document-macro IoU is 0.4779169321.
 
 That score was produced by the capped classical experiment:
 
@@ -78,16 +78,37 @@ That metrics file has no `provenance.json` seal. The builder therefore
 refuses to package it until the bytes are sealed without editing them. No
 second public-validation document-macro IoU is claimed.
 
-A separate classical segmenter is `scripts/segment_predict.py` with
-`configs/segment.yaml`. Flat gray fills use the local median. Other patterns
-use multi-scale Gabor energy, with the prototype taken from pattern pixels
-inside the query so a symbol in the box does not define the match. The
-threshold constants were chosen on real training queries only. This report
-does not yet include a public-validation score for that command:
+The submitted public-validation score is document-macro IoU 0.6283198947626735.
+
+That score is the unedited output of `challenge/evaluate.py` on
+`runs/segment-v2/metrics.json` (46605 bytes, SHA-256
+`4b5fcf5a96ac2686209171cd86ec2ba3d94e130b62784ec1e325d4da885cec5b`). It covers
+57 queries and 13 documents. Mean query IoU is 0.5528167717705091. Pooled
+precision is 0.5457175109355157 and pooled recall is 0.7497639252815699.
+Empty-target queries were 0. Reviewed-blank pixels were 0. Two examples are
+positive-only. Three documents scored 1.0. `doc-2f69e1183867e83c` scored
+0.03489977904040404.
+
+The masks came from:
 
 ```bash
+python challenge/make_inputs.py --manifest dataset/val.json --output validation-inputs.json
 python scripts/segment_predict.py --inputs validation-inputs.json --data-root dataset --output-dir predictions --config configs/segment.yaml
 ```
+
+`configs/segment.yaml` sets `tone_threshold: 0.7`, `alpha: 0.75`, and
+`max_side: 2000`. Flat gray fills are matched at native resolution by gray
+level. Other patterns use multi-scale Gabor energy at a 2,000-pixel working
+side, with the prototype taken from pattern pixels inside the query.
+Threshold constants were chosen on real training queries before either
+public-validation run.
+
+An earlier public-validation run of the same segmenter downsampled tone fills
+and scored 0.452178232295848. Inspecting those empty gray-hex masks showed
+that downsampling mixed black lines into the fill. The submitted run keeps
+tone matching at native resolution. The threshold numbers were not refit on
+validation. Both evaluator outputs are unedited. The submitted file is the
+second one.
 
 The neural ensemble has not been trained or scored here.
 
@@ -112,30 +133,36 @@ predictions and are not a measured score.
 
 ## Timing and hardware
 
-No GPU was available. The capped-1600 metrics file does not record processor
-model, wall-clock time, or peak memory. Timing coverage for a future sealed
-bundle is wall clock including loading, preprocessing, inference, file
-writing, and initialization. When a sealed run has no nonnegative `runtime_seconds` and
-`time_spent_hours`, `scripts/build_submission.py` exits 2 and writes nothing.
-Inference timing was not measured. The builder does not substitute zeros.
+No GPU was available. The submitted segmenter run used 4 CPU threads on an
+Intel Xeon host with no CUDA device. `runs/segment-v2/timing.json` records
+wall-clock inference of 112.520262125 seconds for 57 queries, including
+loading, preprocessing, inference, and file writing. Peak resident memory was
+927.171875 MiB from `resource.getrusage.ru_maxrss`. `time_spent_hours` in that
+file is that same wall clock converted to hours, not a separately metered
+development duration. The capped-1600 metrics file does not record processor
+model, wall-clock time, or peak memory. When a sealed run has no nonnegative
+`runtime_seconds` and `time_spent_hours`, `scripts/build_submission.py` exits
+2 and writes nothing. The builder does not substitute zeros.
 `submission.example.json` still uses 0 for those two fields so the example
 file itself passes the validator. Those zeros are schema fillers, not
 measurements.
 
 ## Data use
 
-The classical baseline uses the public dataset and no neural pretrained
-weights. Public-validation labels were read by the official evaluator after
-prediction to produce the capped-1600 metrics. They are not inference inputs
-and were not used to select an ensemble. No private-test labels were read.
+The classical baseline and the segmenter use the public dataset and no neural
+pretrained weights. Public-validation labels are not inference inputs. They
+were read by the official evaluator after prediction. After the first
+segmenter evaluation, those labels showed empty masks on gray fills, which
+led to the native-resolution tone fix. Threshold constants were not refit on
+validation scores. No private-test labels were read.
 Development of this repository was assisted by an automated coding agent.
 That assistance did not train or score the neural ensemble.
 
 ## Limitations and failure cases
 
-The capped working resolution can drop fine hatch. Pooled recall is about
-0.565, below the 95% aspiration, and one public-validation document scored
-0. The fixed threshold is 0.5. The historical 37-query reference does not
-measure this split. Fixture drawings do not show model behavior. A submission
-bundle cannot be completed from `runs/final` until an unedited sealed metrics
-file exists.
+The capped-1600 baseline pooled recall is about 0.565. The submitted
+segmenter pooled recall is about 0.750, still below the 95% aspiration.
+Sparse stipple on `doc-2f69e1183867e83c` scores about 0.035 because the query
+is a few gray dots and the same statistics appear in reviewed negatives.
+The historical 37-query reference does not measure this split. Fixture
+drawings do not show model behavior. The 0.75 aspiration is not claimed.
