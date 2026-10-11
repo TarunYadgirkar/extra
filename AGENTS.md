@@ -1,6 +1,6 @@
 # Agent guide: hatch matching solution
 
-This file is the starting point for any agent continuing work here. The upstream challenge docs are README.md, SPECIFICATION.md and BENCHMARK.md. The full results history, including the numbers for every experiment tried, is in `solution/EXPERIMENTS.md`. Read that file before proposing anything, because many obvious ideas have already been measured and failed.
+This file is the starting point for any agent continuing work here. The upstream challenge docs are CHALLENGE.md (the organizer's original README), SPECIFICATION.md and BENCHMARK.md. README.md is the solution overview. The full results history, including the numbers for every experiment tried, is in `solution/EXPERIMENTS.md`. Read that file before proposing anything, because many obvious ideas have already been measured and failed.
 
 ## Task
 
